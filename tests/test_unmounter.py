@@ -33,6 +33,17 @@ OTHER = Device(
     mount_point=None,
 )
 MOUNT_POINT = "/Volumes/HD1"
+# A second disk with its own label: the case a label-only identity gets wrong.
+HD2 = Device(
+    identifier="disk6s1",
+    device="/dev/disk6s1",
+    label="HD2",
+    uuid="UUID-HD2",
+    size=1,
+    fs_type="Windows_NTFS",
+    mount_point=None,
+)
+HD2_MOUNT_POINT = "/Volumes/HD2"
 NTFS3G = "/usr/local/bin/ntfs-3g"
 
 OURS = MountEntry(
@@ -40,6 +51,9 @@ OURS = MountEntry(
 )
 APPLE = MountEntry(
     source="/dev/disk4s1", mount_point=MOUNT_POINT, fs="ntfs", read_only=True
+)
+HD2_OURS = MountEntry(
+    source="fuse-t:/HD2", mount_point=HD2_MOUNT_POINT, fs="nfs", read_only=False
 )
 
 
@@ -67,6 +81,7 @@ class FakeEnv:
         self.points: dict[str, str] = {
             DEVICE.device: MOUNT_POINT,
             OTHER.device: MOUNT_POINT,
+            HD2.device: HD2_MOUNT_POINT,
         }
         self.sent_signals: list[str] = []
         self.slept: list[float] = []
@@ -242,12 +257,11 @@ def test_unmount_evicts_apple_mount_when_that_is_all_that_is_mounted():
     assert env.state() == "ro"
 
 
-@pytest.mark.parametrize("source", ["fuse-t:/HD1", "fuse-t:/HD1-old"])
-def test_live_mount_is_found_when_pgrep_confirms_the_device(source):
+def test_live_mount_is_found_when_the_entry_names_the_label():
     # The snapshot is stale: it knows of no mount, but FUSE-T still serves
-    # /Volumes/HD1 (and may still carry a label the disk no longer has).
+    # /Volumes/HD1 under this volume's label.
     stale = MountEntry(
-        source=source, mount_point=MOUNT_POINT, fs="nfs", read_only=False
+        source="fuse-t:/HD1", mount_point=MOUNT_POINT, fs="nfs", read_only=False
     )
     env = FakeEnv([stale])
     volume = Volume(device=DEVICE, mounts=())
@@ -264,6 +278,28 @@ def test_live_mount_is_found_when_pgrep_confirms_the_device(source):
     assert ["diskutil", "unmount", MOUNT_POINT] in env.calls
     assert ["pgrep", "-f", "ntfs-3g .*/dev/disk4s1( |$)"] in env.calls
     assert env.state() == "unmounted"
+
+
+def test_an_entry_under_another_label_is_never_this_volumes_mount():
+    # fuse-t:/HD1-old names a different volume. A label the disk no longer
+    # carries cannot be claimed from here: tearing it down would destroy
+    # another volume's mount, so nothing is touched and nothing is guessed.
+    foreign = MountEntry(
+        source="fuse-t:/HD1-old", mount_point=MOUNT_POINT, fs="nfs", read_only=False
+    )
+    env = FakeEnv([foreign])
+
+    restored = unmount_volume(
+        Volume(device=DEVICE, mounts=()),
+        run=env.run,
+        mounts=env.mounts,
+        sleep=env.sleep,
+        keep_unmounted=True,
+    )
+
+    assert restored is True
+    assert env.diskutil_calls() == []
+    assert env.entries == [foreign]
 
 
 def test_unmount_of_another_volume_with_the_same_label_refuses_and_leaves_a_alone():
@@ -312,6 +348,50 @@ def test_unmount_of_the_serving_volume_unpacks_its_own_mount():
     assert ["pgrep", "-f", "ntfs-3g .*/dev/disk4s1( |$)"] in env.calls
     assert ["diskutil", "unmount", MOUNT_POINT] in env.calls
     assert env.state() == "ro"
+
+
+def test_unmount_touches_only_the_volume_with_its_own_label():
+    # Two disks, two labels, both read-write. HD1's teardown may name only
+    # /Volumes/HD1: HD2's live mount is not a candidate for it.
+    env = FakeEnv(
+        [OURS, HD2_OURS],
+        serving=[serve(DEVICE, MOUNT_POINT), serve(HD2, HD2_MOUNT_POINT)],
+    )
+    drive_hd1 = next(
+        v for v in build_volumes([DEVICE, HD2], env.mounts()) if v.device is DEVICE
+    )
+    assert drive_hd1.state == "rw"
+
+    restored = unmount_volume(
+        drive_hd1, run=env.run, mounts=env.mounts, sleep=env.sleep
+    )
+
+    assert restored is True
+    assert [c for c in env.calls if c[:2] == ["diskutil", "unmount"]] == [
+        ["diskutil", "unmount", MOUNT_POINT]
+    ]
+    assert ["diskutil", "mount", "/dev/disk4s1"] in env.calls
+    assert HD2_OURS in env.entries
+    assert not [e for e in env.entries if e.source == "fuse-t:/HD1"]
+    assert env.sent_signals == []
+
+
+def test_unmount_of_an_unmounted_label_leaves_another_labels_mount_alone():
+    # HD1 is not mounted and HD2 is read-write: there is nothing to do, so the
+    # command must not name HD2 at all — not to unmount it, not to signal it.
+    env = FakeEnv([HD2_OURS], serving=[serve(HD2, HD2_MOUNT_POINT)])
+    drive_hd1 = next(
+        v for v in build_volumes([DEVICE, HD2], env.mounts()) if v.device is DEVICE
+    )
+    assert drive_hd1.state == "unmounted"
+
+    restored = unmount_volume(
+        drive_hd1, run=env.run, mounts=env.mounts, sleep=env.sleep
+    )
+
+    assert restored is True
+    assert env.calls == []
+    assert env.entries == [HD2_OURS]
 
 
 def test_unmount_with_a_unique_label_proceeds_when_pgrep_cannot_answer():
@@ -511,6 +591,20 @@ def test_eject_ignores_a_same_label_mount_served_by_another_disk():
     )
 
     assert ["diskutil", "eject", "disk6"] in env.calls
+
+
+def test_eject_of_an_unmounted_label_is_not_refused_by_another_labels_mount():
+    # Only HD2 is mounted. Ejecting HD1 is not that entry's business.
+    env = FakeEnv([HD2_OURS], serving=[serve(HD2, HD2_MOUNT_POINT)])
+    drive_hd1 = next(
+        v for v in build_volumes([DEVICE, HD2], env.mounts()) if v.device is DEVICE
+    )
+    assert has_mount(drive_hd1, run=env.run, mounts=env.mounts) is False
+
+    eject_volume(drive_hd1, run=env.run, mounts=env.mounts, sleep=env.sleep)
+
+    assert env.calls == [["diskutil", "eject", "disk4"]]
+    assert env.entries == [HD2_OURS]
 
 
 def test_eject_refuses_when_a_shared_label_cannot_be_resolved():

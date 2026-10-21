@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from ntfsmnt.identity import is_ours, owner, parse_pid, pid_pattern
+from ntfsmnt.identity import names_label, owner, parse_pid, pid_pattern, source_for
 from ntfsmnt.mounttable import MountEntry
 
 DEVICE = "/dev/disk4s1"
@@ -12,6 +12,9 @@ OURS = MountEntry(
 )
 APPLE = MountEntry(
     source=DEVICE, mount_point="/Volumes/HD1", fs="ntfs", read_only=True
+)
+OTHER_LABEL = MountEntry(
+    source="fuse-t:/HD2", mount_point="/Volumes/HD2", fs="nfs", read_only=False
 )
 
 
@@ -50,24 +53,15 @@ def test_parse_pid_takes_first_integer_token():
     assert parse_pid("") is None
 
 
-def test_is_ours_asks_pgrep_for_the_precise_pattern():
-    run = FakeRun((0, "4242\n"))
-
-    assert is_ours(OURS, device=DEVICE, run=run) is True
-    assert run.calls == [["pgrep", "-f", "ntfs-3g .*/dev/disk4s1( |$)"]]
-
-
-def test_is_ours_is_false_when_pgrep_finds_no_serving_process():
-    run = FakeRun((1, ""))
-
-    assert is_ours(OURS, device=DEVICE, run=run) is False
-
-
-def test_is_ours_does_not_ask_about_apple_or_other_mounts():
-    run = FakeRun((0, "4242\n"))
-
-    assert is_ours(APPLE, device=DEVICE, run=run) is False
-    assert run.calls == []
+def test_names_label_accepts_only_the_volumes_own_fuse_t_source():
+    assert source_for("HD1") == "fuse-t:/HD1"
+    assert names_label(OURS, "HD1") is True
+    assert names_label(OURS, "HD2") is False
+    assert names_label(OTHER_LABEL, "HD1") is False
+    # A label is the entry's identity; an unlabeled volume cannot claim one.
+    assert names_label(OURS, "") is False
+    # Apple's mount names a device, not a label.
+    assert names_label(APPLE, "HD1") is False
 
 
 def owner_for(results, *, label_shared=False, entry=OURS):
@@ -78,6 +72,24 @@ def owner_for(results, *, label_shared=False, entry=OURS):
         run=FakeRun(*results),
         label_shared=label_shared,
     )
+
+
+def test_owner_is_other_for_an_entry_carrying_another_label():
+    # fuse-t:/HD2 is another volume's mount, however unique the label HD1 is
+    # and whatever pgrep would say about disk4s1. Asking would be a guess.
+    run = FakeRun((0, "4242\n"))
+
+    verdict = owner(OTHER_LABEL, device=DEVICE, label="HD1", run=run)
+
+    assert verdict == "other"
+    assert run.calls == []
+
+
+def test_owner_is_other_for_apple_mounts_without_asking_pgrep():
+    run = FakeRun((0, "4242\n"))
+
+    assert owner(APPLE, device=DEVICE, label="HD1", run=run) == "other"
+    assert run.calls == []
 
 
 def test_owner_is_ours_when_the_process_names_the_device():

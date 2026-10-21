@@ -13,7 +13,7 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 ## Commands
 
 - Install deps: `uv sync`
-- Test: `uv run pytest -q` (139 tests)
+- Test: `uv run pytest -q` (147 tests)
 - Manual acceptance: `tests/manual/acceptance.md` (real hardware, root, Full
   Disk Access terminal)
 - Build/run: `uv run ntfsmnt ...`
@@ -48,9 +48,10 @@ tests/
 
 - `diskutil.py` / `mounttable.py` — parse live system state.
 - `volumes.py` — combine devices and mounts; determine `rw`/`ro`/`unmounted`.
-- `identity.py` — decide whether a `fuse-t:` entry is *this* device's mount:
-  a unique label settles it and `pgrep` corroborates; with a shared label the
-  `ntfs-3g` process whose argv names the device must decide.
+- `identity.py` — decide whether a `fuse-t:` entry is *this* device's mount: only
+  `fuse-t:/<label>` is a candidate, a unique label then settles it and `pgrep`
+  corroborates; with a shared label the `ntfs-3g` process whose argv names the
+  device must decide.
 - `options.py` — build ntfs-3g options, classify failures (hibernated, dirty,
   busy, EPERM).
 - `doctor.py` — check the host; hard failures are `fuse-t`, `ntfs-3g`, `root`,
@@ -81,18 +82,22 @@ These are hard requirements. Do not weaken them in any change.
 5. **Failed mounts restore the read-only mount.** `mounter.py` evicts Apple's
    mount, so every exit path must restore it. `_fail` and the `except
    BaseException` tail call `_restore_read_only`, which unmounts the mount point
-   unconditionally and restores last; it may claim "restored" only when the
-   mount table confirms it.
+   only when a fresh, best-effort table read shows a `fuse-t:` entry there (an
+   unreadable table still attempts it), and restores last; it may claim
+   "restored" only when the mount table confirms it.
 6. **No guesses on duplicate labels.** `resolve()` raises `AmbiguousVolume` and
    the CLI lists candidates; never pick the first match. A shared label is
    resolved by the serving process; a `fuse-t:` mount is never evicted to make
    room, and an unanswerable `pgrep` refuses rather than guesses.
-7. **No write without a probe.** `mounter.py` writes, reads back, and deletes
+7. **An entry's own source is its identity.** Only `fuse-t:/<label>` can be this
+   volume's mount; an entry naming another label is another volume's and is
+   never classified, unmounted, or counted as mounted for this one.
+8. **No write without a probe.** `mounter.py` writes, reads back, and deletes
    `.ntfsmnt-probe`, then checks the mount point is owned by the invoking uid
    and gid, before reporting success.
-8. **Hibernated and dirty volumes are refused by default.** `--recover` and
+9. **Hibernated and dirty volumes are refused by default.** `--recover` and
    `--remove-hiberfile` are opt-in only.
-9. **All external effects go through injected callables.** Production passes
+10. **All external effects go through injected callables.** Production passes
    `real_run`, `read_mount_table`, `time.sleep`, and the real probe; tests pass
    fakes. Every subprocess effect (`diskutil`, `ntfs-3g`, `mount`, `pgrep`,
    `kill`) goes through an injected callable (`run` or `read_mount_table`).

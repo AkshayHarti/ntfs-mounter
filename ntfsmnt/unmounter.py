@@ -7,9 +7,11 @@ read-only mount is put back on every exit from the teardown — success, busy, o
 interrupt — and the caller is told when that failed.
 
 A ``fuse-t:`` entry names a label, not a device, so teardown resolves it with
-:func:`ntfsmnt.identity.owner`. With a unique label the entry is the volume's
-even when ``pgrep`` cannot answer; with a shared label only the serving process
-can say, and an unanswerable ``pgrep`` refuses instead of guessing.
+:func:`ntfsmnt.identity.owner`. An entry for another label is another volume's
+mount and is never classified for this one; with a unique label the remaining
+entry is the volume's even when ``pgrep`` cannot answer; with a shared label
+only the serving process can say, and an unanswerable ``pgrep`` refuses instead
+of guessing.
 
 Every side effect goes through the injected ``run``, ``mounts`` and ``sleep``
 callables, so the whole sequence runs without touching the host. ``run`` never
@@ -20,7 +22,7 @@ stderr captured together; that is also where ``pgrep``'s pid list arrives.
 import re
 from collections.abc import Callable
 
-from ntfsmnt.identity import is_fuse_t, owner, parse_pid, pid_pattern
+from ntfsmnt.identity import names_label, owner, parse_pid, pid_pattern
 from ntfsmnt.mounttable import MountEntry
 from ntfsmnt.volumes import Volume
 
@@ -41,6 +43,10 @@ def _classify(
 ) -> tuple[list[str], list[str], list[str]]:
     """Split the table's FUSE-T entries into ours, another volume's, and unclear.
 
+    Only entries whose source is ``fuse-t:/<label>`` are candidates at all: an
+    entry for another label is another volume's mount, never this one's. Apple's
+    entries are handled by the callers, which match them by device.
+
     ``unclear`` only happens when the label is shared and ``pgrep`` cannot
     answer: a unique label settles ownership on its own.
     """
@@ -48,7 +54,7 @@ def _classify(
     foreign: list[str] = []
     unclear: list[str] = []
     for entry in entries:
-        if not is_fuse_t(entry):
+        if not names_label(entry, volume.device.label):
             continue
         verdict = owner(
             entry,

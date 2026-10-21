@@ -7,7 +7,7 @@ from ntfsmnt import mounter
 from ntfsmnt.models import Device
 from ntfsmnt.mounttable import MountEntry
 from ntfsmnt.mounter import MountFailed, _write_probe, mount_volume
-from ntfsmnt.volumes import Volume
+from ntfsmnt.volumes import Volume, build_volumes
 
 DEVICE = Device(
     identifier="disk4s1",
@@ -40,6 +40,17 @@ DATA_DISK = Device(
 )
 MOUNT_POINT = "/Volumes/HD1"
 OTHER_MOUNT_POINT = "/Volumes/DATA"
+# A second disk with a label of its own: its entry may never stand in for HD1's.
+HD2 = Device(
+    identifier="disk6s1",
+    device="/dev/disk6s1",
+    label="HD2",
+    uuid="UUID-HD2",
+    size=1,
+    fs_type="Windows_NTFS",
+    mount_point=None,
+)
+HD2_MOUNT_POINT = "/Volumes/HD2"
 NTFS3G = "/usr/local/bin/ntfs-3g"
 
 
@@ -378,6 +389,151 @@ def test_same_label_mount_served_by_this_device_is_idempotent(fake_env):
     assert result.pid is None
     assert fake_env.ntfs3g_invocations() == 0
     assert not [c for c in fake_env.calls if c[0] == "diskutil"]
+
+
+def test_mount_is_not_satisfied_by_another_labels_mount(fake_env):
+    # HD1 is unmounted; only HD2 (a different label) is read-write. HD2's entry
+    # says nothing about HD1, so HD1 must actually be mounted.
+    fake_env.points[HD2.device] = HD2_MOUNT_POINT
+    fake_env.table = [rw_entry(HD2, HD2_MOUNT_POINT)]
+    fake_env.procs = [[NTFS3G, HD2.device, HD2_MOUNT_POINT, "-o", "volname=HD2"]]
+    fake_env.configure()
+    drive_hd1 = next(
+        v
+        for v in build_volumes([DEVICE, HD2], fake_env.mounts())
+        if v.device is DEVICE
+    )
+    assert drive_hd1.state == "unmounted"
+
+    result = mount_volume(
+        drive_hd1,
+        uid=501,
+        gid=20,
+        run=fake_env.run,
+        mounts=fake_env.mounts,
+        sleep=fake_env.sleep,
+        probe=fake_env.probe,
+    )
+
+    ntfs3g = next(call for call in fake_env.calls if call[0] == NTFS3G)
+    assert ntfs3g[1] == DEVICE.device
+    assert ntfs3g[2] == MOUNT_POINT
+    assert fake_env.ntfs3g_invocations() == 1
+    assert result.mount_point == MOUNT_POINT
+    assert rw_entry(HD2, HD2_MOUNT_POINT) in fake_env.table
+    assert ["diskutil", "unmount", HD2_MOUNT_POINT] not in fake_env.calls
+    assert [
+        "pgrep",
+        "-f",
+        "ntfs-3g .*/dev/disk6s1( |$)",
+    ] not in fake_env.calls
+
+
+def test_mount_is_idempotent_for_its_own_label_while_another_label_is_mounted(
+    fake_env,
+):
+    fake_env.points[HD2.device] = HD2_MOUNT_POINT
+    fake_env.table = [rw_entry(DEVICE, MOUNT_POINT), rw_entry(HD2, HD2_MOUNT_POINT)]
+    fake_env.procs = [
+        [NTFS3G, DEVICE.device, MOUNT_POINT, "-o", "volname=HD1"],
+        [NTFS3G, HD2.device, HD2_MOUNT_POINT, "-o", "volname=HD2"],
+    ]
+    fake_env.configure()
+    drive_hd1 = next(
+        v
+        for v in build_volumes([DEVICE, HD2], fake_env.mounts())
+        if v.device is DEVICE
+    )
+    assert drive_hd1.state == "rw"
+
+    result = mount_volume(
+        drive_hd1,
+        uid=501,
+        gid=20,
+        run=fake_env.run,
+        mounts=fake_env.mounts,
+        sleep=fake_env.sleep,
+        probe=fake_env.probe,
+    )
+
+    assert result.mount_point == MOUNT_POINT
+    assert result.pid is None
+    assert not [call for call in fake_env.calls if call[0] in (NTFS3G, "diskutil")]
+    assert fake_env.table == [
+        rw_entry(DEVICE, MOUNT_POINT),
+        rw_entry(HD2, HD2_MOUNT_POINT),
+    ]
+
+
+def test_a_live_mount_elsewhere_does_not_count_as_idempotent(fake_env):
+    # Our label is live at /Volumes/HD1-old, not at the requested mount point.
+    # Success there would claim a mount this path does not have.
+    stale = MountEntry("fuse-t:/HD1", "/Volumes/HD1-old", "nfs", False)
+    fake_env.table = [stale]
+    fake_env.procs = [[NTFS3G, DEVICE.device, "/Volumes/HD1-old", "-o", "volname=HD1"]]
+    fake_env.configure()
+
+    result = mount_volume(
+        Volume(device=DEVICE, mounts=(OURS,)),  # snapshot: read-write at MOUNT_POINT
+        uid=501,
+        gid=20,
+        run=fake_env.run,
+        mounts=fake_env.mounts,
+        sleep=fake_env.sleep,
+        probe=fake_env.probe,
+    )
+
+    ntfs3g = next(call for call in fake_env.calls if call[0] == NTFS3G)
+    assert ntfs3g[2] == MOUNT_POINT
+    assert result.mount_point == MOUNT_POINT
+    assert ["diskutil", "unmount", "/Volumes/HD1-old"] not in fake_env.calls
+
+
+def test_restore_does_not_unmount_what_is_not_a_fuse_t_mount(fake_env):
+    # No FUSE-T entry sits at the mount point when the failure happens, so the
+    # restore goes straight to Apple's mount instead of evicting anything.
+    with pytest.raises(MountFailed):
+        fake_env.mount(state="unmounted", device_present=False)
+
+    assert not [call for call in fake_env.calls if call[:2] == ["diskutil", "unmount"]]
+    assert fake_env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
+
+
+def test_a_foreign_labels_mount_at_the_target_is_refused_not_evicted(
+    fake_env, mount_point_dirs
+):
+    # The mount at HD1's target names HD2. It is not HD1's mount, and it is not
+    # a same-label sibling either: refuse, name it honestly, touch nothing.
+    foreign = MountEntry("fuse-t:/HD2", MOUNT_POINT, "nfs", False)
+    fake_env.table = [foreign]
+    fake_env.procs = [[NTFS3G, HD2.device, MOUNT_POINT, "-o", "volname=HD2"]]
+    fake_env.configure()
+    drive_hd1 = next(
+        v
+        for v in build_volumes([DEVICE, HD2], fake_env.mounts())
+        if v.device is DEVICE
+    )
+
+    with pytest.raises(MountFailed) as err:
+        mount_volume(
+            drive_hd1,
+            uid=501,
+            gid=20,
+            run=fake_env.run,
+            mounts=fake_env.mounts,
+            sleep=fake_env.sleep,
+            probe=fake_env.probe,
+        )
+
+    message = str(err.value)
+    assert MOUNT_POINT in message
+    assert "'HD2'" in message
+    assert "shares the label" not in message
+    assert "unmount it before mounting this one" in message
+    assert mount_point_dirs == []
+    assert not [call for call in fake_env.calls if call[:2] == ["diskutil", "unmount"]]
+    assert fake_env.ntfs3g_invocations() == 0
+    assert fake_env.table == [foreign]
 
 
 def test_pgrep_uses_the_precise_device_pattern(fake_env):

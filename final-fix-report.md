@@ -81,3 +81,96 @@ mount   /dev/disk4s1 -> 0  "mounted DATA at /Volumes/DATA"; no diskutil calls
 ```
 
 The mount table still holds drive A's entry after all three commands.
+
+## 2026-10-21 — C1, third pass: ownership starts at the entry's own label
+
+**Status:** fixed.
+**Commit:** `fix: scope mount ownership to the entry's own label`
+**Tests:** `uv run pytest -q` → 147 passed.
+
+### What was still wrong
+
+`identity.owner()` asked `pgrep` whether the volume's device had a serving
+process, but never asked whether the *entry* named that volume at all. Its
+`label` parameter was dead, so every `fuse-t:` entry in the live table was a
+candidate for every volume. With HD1 (`/dev/disk4s1`, label `HD1`) and HD2
+(`/dev/disk6s1`, label `HD2`) attached:
+
+- both read-write: `unmount HD1` unmounted `/Volumes/HD1` **and**
+  `/Volumes/HD2`, then restored `/dev/disk4s1`, and returned True — HD2's live
+  mount was destroyed by a command that never named it;
+- HD1 unmounted, HD2 read-write: `unmount HD1` still unmounted `/Volumes/HD2`
+  (a unique label turned the missing `pgrep` into "ours"); with HD2 busy it also
+  skipped HD1's restore and sent `SIGTERM` to the `disk4s1` server "for" a mount
+  point it does not serve;
+- `mount HD1` with only HD2 read-write returned `mount_point="/Volumes/HD1"`
+  with zero calls — a false success, nothing mounted;
+- `eject HD1` with only HD2 mounted was refused as "still mounted".
+
+### What changed
+
+- `identity.names_label(entry, label)` / `source_for(label)`: a `fuse-t:` entry
+  claims exactly one label, and only `fuse-t:/<label>` can be this volume's
+  mount. `owner()` now returns `"other"` for anything else **before** asking
+  `pgrep`; the `label` parameter is live. Apple's mounts are still handled by
+  `source == device.device` in the callers, unchanged.
+- `unmounter._classify` and `mounter._ownership` filter candidates by that same
+  source match, so a differently labelled entry cannot be classified — or
+  counted as mounted, unmounted, or signalled — for this volume.
+- `mounter.mount_volume`: idempotency now also requires the resolved entry's
+  `mount_point` to be the target. A live mount of this label elsewhere is not a
+  success; the mount falls through to the target (which still refuses if a
+  FUSE-T mount occupies it). `_wait_for_mount` verifies the label too.
+- `mounter._restore_read_only`: the teardown unmount now runs only when a fresh
+  best-effort table read shows a `fuse-t:` entry at that path; an Apple mount,
+  an empty path, or another volume's table is skipped. An unreadable table
+  still attempts the unmount, so I1 is not weakened.
+- `identity.is_ours` had no production caller and is deleted with its tests.
+- README and AGENTS.md updated: the source is the entry's identity (new
+  invariant 7), the restore teardown condition, the mount-point requirement for
+  idempotency, and a limitation for a relabelled volume whose old mount names
+  the previous label.
+
+### Tests
+
+The matrix, all built from real `build_volumes` snapshots of the live fake
+table (and each verified to fail against the previous source):
+
+- HD1 and HD2 both read-write, distinct labels: `unmount HD1` runs exactly
+  `diskutil unmount /Volumes/HD1`, restores `/dev/disk4s1`, leaves HD2's entry
+  in the table, sends no signal, returns True.
+- HD1 unmounted, HD2 read-write: `unmount HD1` makes no calls at all; HD2 is
+  untouched.
+- HD1 unmounted, HD2 read-write: `mount HD1` invokes
+  `ntfs-3g /dev/disk4s1 /Volumes/HD1` and never `pgrep`s `disk6s1`; HD2's entry
+  is not unmounted.
+- HD1 and HD2 both mounted: `mount HD1` is an idempotent success with zero
+  `diskutil`/`ntfs-3g` calls.
+- HD2 read-write only: `eject HD1` runs `diskutil eject disk4` instead of
+  refusing.
+- an entry under another label (`fuse-t:/HD1-old`) is never unmounted;
+  `owner()` answers `"other"` without a `pgrep` call.
+- a live mount of this label at another path does not count as idempotent: the
+  target is mounted, the stale entry is left alone.
+- a `fuse-t:/HD2` mount occupying HD1's target is refused with the label it
+  actually carries (`not to 'HD1'`), with no eviction, mkdir, or `ntfs-3g` run.
+- the failure-path restore skips the teardown when no `fuse-t:` entry is at the
+  mount point, and still attempts it when the table is unreadable.
+- same-label duplicate tests (unmount/eject/mount) unchanged and green.
+
+### Verification
+
+`uv run pytest -q` → **147 passed**.
+
+The same matrix run against the pre-fix `owner`/`_classify` reproduces the
+review's findings exactly:
+
+```
+1 unmount HD1 -> True, diskutil unmounts /Volumes/HD1 AND /Volumes/HD2, HD2 gone
+2 unmount HD1 -> pgrep disk4s1, diskutil unmount /Volumes/HD2, diskutil mount disk4s1
+3 mount HD1   -> MountResult('/Volumes/HD1'), 0 ntfs-3g calls
+4 has_mount(HD1) -> True (eject refused)
+```
+
+With the fix: 1 touches only `/Volumes/HD1`, 2 makes no calls, 3 runs
+`ntfs-3g /dev/disk4s1 /Volumes/HD1`, 4 is False.

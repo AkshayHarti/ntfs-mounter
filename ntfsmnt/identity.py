@@ -1,11 +1,13 @@
-"""Corroborate a mount with the device that serves it.
+"""Corroborate a mount with the volume it names and the device that serves it.
 
 macOS reports our FUSE-T mount as ``fuse-t:/<label> on <mount point> (nfs)``:
-the entry names a label, never a device. A label is only ambiguous when two
-volumes share it. When exactly one NTFS volume in the snapshot carries the
-label, that entry is that volume's mount and ``pgrep`` is corroboration, not a
-requirement. When two or more volumes share the label, only the ``ntfs-3g``
-process whose argv names the device can decide.
+the entry names a label, never a device. The entry's own source is therefore
+the first question: ``fuse-t:/HD2`` is never a candidate for HD1, whatever
+process happens to be running. A label is only ambiguous when two volumes share
+it. When exactly one NTFS volume in the snapshot carries the label, that entry
+is that volume's mount and ``pgrep`` is corroboration, not a requirement. When
+two or more volumes share the label, only the ``ntfs-3g`` process whose argv
+names the device can decide.
 
 Every external effect goes through the injected ``run``.
 """
@@ -42,6 +44,21 @@ def is_fuse_t(entry: MountEntry) -> bool:
     return entry.fs == "nfs" and entry.source.startswith("fuse-t:")
 
 
+def source_for(label: str) -> str:
+    """The source a FUSE-T mount of ``label`` reports in the mount table."""
+    return f"fuse-t:/{label}"
+
+
+def names_label(entry: MountEntry, label: str) -> bool:
+    """Does ``entry`` claim to be the FUSE-T mount of ``label``?
+
+    A ``fuse-t:`` entry names a label and nothing else, so its source is the
+    only identity it offers. ``fuse-t:/HD2`` says "HD2": it is another volume's
+    mount even when the label is unique and even when ``pgrep`` finds a process.
+    """
+    return bool(label) and entry.fs == "nfs" and entry.source == source_for(label)
+
+
 def owner(
     entry: MountEntry,
     *,
@@ -56,6 +73,10 @@ def owner(
     what settles it: ownership is decided by the device node and the process
     serving the mount, because a label can be shared or stale.
 
+    The entry's own source comes first: only ``fuse-t:/<label>`` can be this
+    volume's mount, and anything else — Apple's mount, another label — is
+    ``"other"`` without asking ``pgrep``.
+
     ``label_shared`` says whether another NTFS volume in the snapshot carries
     the same label. ``pgrep`` exits 1 (no process names ``device``) for every
     same-label mount, so:
@@ -68,7 +89,7 @@ def owner(
     - anything else (127, a wrapper error) — ``"unknown"``; callers must not
       guess, and may treat it as ours only when the label is unique.
     """
-    if not is_fuse_t(entry):
+    if not names_label(entry, label):
         return "other"
     returncode, output = run(["pgrep", "-f", pid_pattern(device)])
     pid = parse_pid(output)
@@ -78,14 +99,3 @@ def owner(
         return "other" if label_shared else "ours"
     return "unknown"
 
-
-def is_ours(
-    entry: MountEntry, *, device: str, run: Callable[[list[str]], tuple[int, str]]
-) -> bool:
-    """Is ``entry`` strictly corroborated as served by ``device``?
-
-    Positive corroboration only: an unanswerable ``pgrep`` is not ownership.
-    :func:`owner` is what mount and unmount decisions use, because a unique
-    label turns an unanswerable ``pgrep`` into an ownership fact.
-    """
-    return owner(entry, device=device, label="", run=run, label_shared=True) == "ours"

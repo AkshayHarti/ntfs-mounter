@@ -164,10 +164,12 @@ This is the command that makes a volume writable. It:
 1. resolves the volume and refuses if the label is ambiguous;
 2. refuses a volume with no label — the label names the mount — before it
    touches anyone's mount (see [Limitations](#limitations));
-3. returns success immediately when the volume already has a FUSE-T mount:
-   with a unique label any `fuse-t:/<label>` entry is this volume's, even if
-   `pgrep` cannot answer; with a shared label only a mount whose serving
-   `ntfs-3g` process names *this* device counts;
+3. returns success immediately when the volume already has a FUSE-T mount **at
+   that mount point**: with a unique label any `fuse-t:/<label>` entry is this
+   volume's, even if `pgrep` cannot answer; with a shared label only a mount
+   whose serving `ntfs-3g` process names *this* device counts. A live mount of
+   this label somewhere else is not a success for this path — `mount` targets
+   the requested mount point;
 4. creates the mount point if needed;
 5. unmounts Apple's read-only mount of this device, or Apple's mount at that
    mount point. It **never** unmounts a FUSE-T mount;
@@ -223,13 +225,15 @@ It tries `diskutil unmount`, then `umount`. If the volume is busy it sends
 busy, it reports which mount point is in use and exits `1`; it never forces or
 kills with `SIGKILL`.
 
-Which mounts belong to the volume is decided by identity, not by label. A
-`fuse-t:/<label>` entry can only belong to a volume with that label: when
-exactly one NTFS volume carries the label, the entry is that volume's and
-`pgrep` is only corroboration; when two or more share it, only the serving
-`ntfs-3g` process can decide. If the label is shared and `pgrep` cannot answer,
-`unmount` refuses with a manual instruction rather than guessing, and it never
-unmounts a `fuse-t:` entry that resolves to another volume:
+Which mounts belong to the volume is decided by the entry's own source first, then
+by the serving process. A `fuse-t:/<label>` entry can only belong to a volume
+with that label; an entry naming another label is another volume's mount and is
+left alone, whatever process is running. Within the volume's label: when exactly
+one NTFS volume carries the label, the entry is that volume's and `pgrep` is only
+corroboration; when two or more share it, only the serving `ntfs-3g` process can
+decide. If the label is shared and `pgrep` cannot answer, `unmount` refuses with
+a manual instruction rather than guessing, and it never unmounts a `fuse-t:`
+entry that resolves to another volume:
 
 ```
 ntfsmnt: The mount at /Volumes/HD1 appears to belong to another volume with the
@@ -489,12 +493,18 @@ If it is missing, `sudo diskutil mount /dev/disk4s1` restores it. Do not run
   mount time Apple's read-only mount is evicted with `diskutil unmount`,
   falling back to `umount -f`; the mount failure path likewise force-unmounts
   our own FUSE-T mount if `diskutil unmount` refuses it, before restoring the
-  read-only mount. A FUSE-T mount is never evicted to make room for another
-  volume.
+  read-only mount — it only runs that unmount when a fresh table read shows a
+  `fuse-t:` entry at the mount point (or the table cannot be read). A FUSE-T
+  mount is never evicted to make room for another volume.
 - **Duplicate labels.** `list` and `status` attribute a `fuse-t:/<label>` entry
   by label, so when two NTFS volumes share a label the mount may be shown on the
   wrong row. `mount`, `unmount`, and `eject` resolve it by device and refuse when
   they cannot; use the device node or UUID to name the right volume.
+- **A relabelled volume's old mount is not claimed.** A FUSE-T mount records the
+  label it was mounted with. If the volume has been relabelled since, its entry
+  names the old label, so `mount`, `unmount`, and `eject` treat it as another
+  volume's mount and leave it alone. Free it by mount point
+  (`sudo diskutil unmount /Volumes/<old>`) and mount again.
 - **Spotlight and Finder** can hold files open and block deletes or unmounts.
   The tool does not disable indexing.
 - **Hibernated and dirty volumes** are refused by default; the opt-in flags
