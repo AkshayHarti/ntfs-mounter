@@ -213,7 +213,7 @@ Ejects the **parent disk** (for `/dev/disk4s1` that is `disk4`), so every volume
 on the same physical drive disappears with it. The guard is per-volume: `eject`
 refuses only when the named volume itself is still mounted, so a still-mounted
 sibling such as HD2 is ejected along with it. Re-plug the drive — or, if it is
-still attached, run `diskutil mount /dev/disk4s1` and `diskutil mount
+still attached, run `sudo diskutil mount /dev/disk4s1` and `sudo diskutil mount
 /dev/disk4s2` — to get both read-only mounts back.
 
 ## JSON output
@@ -398,8 +398,10 @@ If it is missing, `sudo diskutil mount /dev/disk4s1` restores it. Do not run
   tested.
 - **No force option for unmount.** The `unmount` command reports a busy volume
   instead of forcing it, there is no `--force`, and `SIGKILL` is never used. At
-  mount time only Apple's read-only mount is evicted, using `diskutil unmount`
-  with a `umount -f` fallback.
+  mount time Apple's read-only mount is evicted with `diskutil unmount`,
+  falling back to `umount -f`; the mount failure path likewise force-unmounts
+  our own FUSE-T mount if `diskutil unmount` refuses it, before restoring the
+  read-only mount.
 - **Spotlight and Finder** can hold files open and block deletes or unmounts.
   The tool does not disable indexing.
 - **Hibernated and dirty volumes** are refused by default; the opt-in flags

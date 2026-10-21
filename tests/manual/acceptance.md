@@ -96,9 +96,9 @@ HD1 is normally mounted read-only, so the probe's device is still in use.
 Unmount it, re-run the check, then restore the read-only mount:
 
 ```bash
-diskutil unmount /dev/disk4s1
+sudo diskutil unmount /dev/disk4s1
 sudo uv run ntfsmnt doctor
-diskutil mount /dev/disk4s1
+sudo diskutil mount /dev/disk4s1
 ```
 
 Only a `Permission denied` / EPERM result as root is the TCC/FDA signal: grant
@@ -228,8 +228,8 @@ Restore afterwards by re-plugging the drive, or, if it is still attached, mount
 both partitions explicitly:
 
 ```bash
-diskutil mount /dev/disk4s1
-diskutil mount /dev/disk4s2
+sudo diskutil mount /dev/disk4s1
+sudo diskutil mount /dev/disk4s2
 ```
 
 Expect both read-only mounts back in `ro` state in `uv run ntfsmnt list`.
@@ -257,7 +257,7 @@ task report; screenshots are not needed.
 | 7 | `uv run ntfsmnt list`, `pgrep -fl ntfs-3g` | state back to `ro`, no serving process left |
 | 8 | `unmount --keep-unmounted` for HD1 and HD2, `mount \| grep HD1` | volumes stay unmounted, nothing silently restored |
 | 8 | `uv run ntfsmnt eject HD1` | ejection succeeds on the parent disk |
-| 8 | `diskutil mount /dev/disk4s1`, `diskutil mount /dev/disk4s2` | both read-only mounts are recoverable |
+| 8 | `sudo diskutil mount /dev/disk4s1`, `sudo diskutil mount /dev/disk4s2` | both read-only mounts are recoverable |
 
 ## What unit tests do not cover, and why
 
