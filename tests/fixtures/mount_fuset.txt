@@ -1,0 +1,1 @@
+fuse-t:/HD1 on /Volumes/HD1 (nfs, nodev, nosuid, noowners)

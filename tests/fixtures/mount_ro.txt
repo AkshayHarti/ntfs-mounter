@@ -1,0 +1,1 @@
+/dev/disk4s1 on /Volumes/HD1 (ntfs, local, nodev, nosuid, read-only, noowners, noatime, fskit)
