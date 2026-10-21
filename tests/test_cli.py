@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 import pytest
 
@@ -125,10 +126,149 @@ def test_confirm_matching_label_reaches_need_root(monkeypatch, capsys):
     rc = main(["mount", "HD1", "--remove-hiberfile"], collector=fake_volumes)
     out = capsys.readouterr().out
     assert rc == 0
-    assert root_calls == [["mount", "HD1"]]
+    assert root_calls == [
+        ["mount", "/dev/disk4s1", "--remove-hiberfile", "--confirmed"]
+    ]
     assert mounted["remove_hiberfile"] is True
     assert mounted["recover"] is False
     assert out.strip() == "mounted HD1 at /Volumes/HD1"
+
+
+def test_reexec_argv_replays_every_flag(monkeypatch, capsys):
+    root_calls = []
+    mounted = {}
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "HD1")
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
+
+    def fake_mount(volume, **kwargs):
+        mounted.update(kwargs)
+        return MountResult(volume=volume, mount_point="/Volumes/HD1", pid=7)
+
+    monkeypatch.setattr(ntfsmnt.cli, "mount_volume", fake_mount)
+
+    rc = main(
+        ["mount", "HD1", "--recover", "--remove-hiberfile", "--json"],
+        collector=fake_volumes,
+    )
+    assert rc == 0
+    argv = root_calls[0]
+    assert argv == [
+        "mount",
+        "/dev/disk4s1",
+        "--recover",
+        "--remove-hiberfile",
+        "--json",
+        "--confirmed",
+    ]
+    capsys.readouterr()
+
+    # Replay exactly what the sudo child receives: same flags, no second prompt.
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("the child prompted twice")
+    )
+    rc = main(argv, collector=fake_volumes)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert mounted["recover"] is True
+    assert mounted["remove_hiberfile"] is True
+    assert json.loads(out) == {"mount_point": "/Volumes/HD1", "pid": 7}
+
+
+def test_unmount_reexec_forwards_keep_unmounted(monkeypatch, capsys):
+    root_calls = []
+    unmounted = {}
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
+
+    def fake_unmount(volume, **kwargs):
+        unmounted.update(kwargs)
+
+    monkeypatch.setattr(ntfsmnt.cli, "unmount_volume", fake_unmount)
+    rc = main(["unmount", "HD1", "--keep-unmounted"], collector=fake_volumes)
+    assert rc == 0
+    argv = root_calls[0]
+    assert argv == ["unmount", "/dev/disk4s1", "--keep-unmounted"]
+
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    assert main(argv, collector=fake_volumes) == 0
+    assert unmounted["keep_unmounted"] is True
+
+
+def test_mount_uses_invoking_uid_and_gid(monkeypatch):
+    calls = {}
+    monkeypatch.setenv("SUDO_UID", "501")
+    monkeypatch.setenv("SUDO_GID", "20")
+    monkeypatch.setattr(ntfsmnt.cli.os, "getuid", lambda: 0)
+    monkeypatch.setattr(ntfsmnt.cli.os, "getgid", lambda: 0)
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    monkeypatch.setattr(
+        ntfsmnt.cli,
+        "mount_volume",
+        lambda volume, **kwargs: calls.update(kwargs)
+        or MountResult(volume=volume, mount_point="/Volumes/HD1", pid=None),
+    )
+    rc = main(["mount", "HD1"], collector=fake_volumes)
+    assert rc == 0
+    assert (calls["uid"], calls["gid"]) == (501, 20)
+
+
+def test_malformed_sudo_ids_fall_back_to_current(monkeypatch):
+    calls = {}
+    monkeypatch.setenv("SUDO_UID", "not-a-number")
+    monkeypatch.setenv("SUDO_GID", "")
+    monkeypatch.setattr(ntfsmnt.cli.os, "getuid", lambda: 0)
+    monkeypatch.setattr(ntfsmnt.cli.os, "getgid", lambda: 0)
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    monkeypatch.setattr(
+        ntfsmnt.cli,
+        "mount_volume",
+        lambda volume, **kwargs: calls.update(kwargs)
+        or MountResult(volume=volume, mount_point="/Volumes/HD1", pid=None),
+    )
+    assert main(["mount", "HD1"], collector=fake_volumes) == 0
+    assert (calls["uid"], calls["gid"]) == (0, 0)
+
+
+def test_recover_does_not_prompt(monkeypatch):
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("--recover must not prompt")
+    )
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    monkeypatch.setattr(
+        ntfsmnt.cli,
+        "mount_volume",
+        lambda volume, **kwargs: MountResult(
+            volume=volume, mount_point="/Volumes/HD1", pid=None
+        ),
+    )
+    assert main(["mount", "HD1", "--recover"], collector=fake_volumes) == 0
+
+
+def test_confirm_eof_exits_2(monkeypatch):
+    root_calls = []
+
+    def no_stdin(_prompt):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", no_stdin)
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
+    with pytest.raises(SystemExit) as exc:
+        main(["mount", "HD1", "--remove-hiberfile"], collector=fake_volumes)
+    assert exc.value.code == 2
+    assert root_calls == []
+
+
+def test_eject_refuses_mounted_volume_before_privilege(monkeypatch, capsys):
+    root_calls = []
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
+    volumes = [make_volume(make_device(), mounts=[OURS_RW])]
+    rc = main(["eject", "HD1"], collector=lambda: volumes)
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert out == ""
+    assert "Unmount it first" in err
+    assert root_calls == []
 
 
 def test_mount_json_output(monkeypatch, capsys):
@@ -144,10 +284,12 @@ def test_mount_json_output(monkeypatch, capsys):
 
 
 def test_unmount_json_output(monkeypatch, capsys):
-    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    root_calls = []
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
     monkeypatch.setattr(ntfsmnt.cli, "unmount_volume", lambda volume, **kwargs: None)
     rc = main(["unmount", "HD1", "--json"], collector=fake_volumes)
     assert rc == 0
+    assert root_calls == [["unmount", "/dev/disk4s1", "--json"]]
     assert json.loads(capsys.readouterr().out) == {"ok": True}
 
 
@@ -158,8 +300,33 @@ def test_eject_reports_success(monkeypatch, capsys):
     rc = main(["eject", "HD1"], collector=fake_volumes)
     out = capsys.readouterr().out
     assert rc == 0
-    assert root_calls == [["eject", "HD1"]]
+    assert root_calls == [["eject", "/dev/disk4s1"]]
     assert out.strip() == "ejected HD1"
+
+
+def test_eject_json_replay_keeps_json(monkeypatch, capsys):
+    root_calls = []
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
+    monkeypatch.setattr(ntfsmnt.cli, "eject_volume", lambda volume, **kwargs: None)
+    assert main(["eject", "HD1", "--json"], collector=fake_volumes) == 0
+    argv = root_calls[0]
+    assert argv == ["eject", "/dev/disk4s1", "--json"]
+    capsys.readouterr()
+
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    assert main(argv, collector=fake_volumes) == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": True}
+
+
+def test_discovery_failure_returns_1(capsys):
+    def broken():
+        raise subprocess.CalledProcessError(1, ["diskutil", "list", "-plist"])
+
+    rc = main(["list"], collector=broken)
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert out == ""
+    assert err.startswith("ntfsmnt: ")
 
 
 def test_doctor_fails_on_hard_failure(monkeypatch, capsys):

@@ -94,10 +94,29 @@ def _lookup(query: str, volumes: Sequence[Volume]) -> Volume | None:
 
 
 def _confirm(label: str) -> None:
-    answer = input(f"Type the volume label ({label}) to confirm: ")
+    try:
+        answer = input(f"Type the volume label ({label}) to confirm: ")
+    except EOFError:
+        print(
+            "ntfsmnt: cannot confirm without a terminal; refusing to continue",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
     if answer != label:
         print(f"ntfsmnt: confirmation failed for '{label}'", file=sys.stderr)
         raise SystemExit(2)
+
+
+def _invoking_ids() -> tuple[int, int]:
+    """The user's ids, surviving the sudo re-exec that made us root."""
+    return (_env_id("SUDO_UID", os.getuid), _env_id("SUDO_GID", os.getgid))
+
+
+def _env_id(name: str, fallback: Callable[[], int]) -> int:
+    try:
+        return int(os.environ[name])
+    except (KeyError, ValueError):
+        return fallback()
 
 
 def _doctor_env() -> Env:
@@ -140,6 +159,7 @@ def _build_parser() -> argparse.ArgumentParser:
     mount.add_argument("--recover", action="store_true")
     mount.add_argument("--remove-hiberfile", action="store_true")
     mount.add_argument("--json", action="store_true")
+    mount.add_argument("--confirmed", action="store_true", help=argparse.SUPPRESS)
 
     unmount = sub.add_parser("unmount", help="restore Apple's read-only mount")
     unmount.add_argument("label")
@@ -193,14 +213,26 @@ def _cmd_mount(args: argparse.Namespace, collector: Callable[[], list[Volume]]) 
     if volume is None:
         return 1
     label = volume.device.label
-    if args.recover or args.remove_hiberfile:
+    # The sudo re-exec keeps only this argv, so every flag must be forwarded.
+    flags = ["--recover"] if args.recover else []
+    if args.remove_hiberfile:
+        flags.append("--remove-hiberfile")
+    if args.json:
+        flags.append("--json")
+    confirmed = args.confirmed
+    if args.remove_hiberfile and not confirmed:
+        # Only --remove-hiberfile discards data; --recover must stay non-interactive.
         _confirm(label)
-    need_root(["mount", args.label])
+        confirmed = True
+    if confirmed:
+        flags.append("--confirmed")
+    need_root(["mount", volume.device.device, *flags])
+    uid, gid = _invoking_ids()
     try:
         result: MountResult = mount_volume(
             volume,
-            uid=os.getuid(),
-            gid=os.getgid(),
+            uid=uid,
+            gid=gid,
             run=real_run,
             mounts=read_mount_table,
             sleep=time.sleep,
@@ -223,7 +255,10 @@ def _cmd_unmount(
     volume = _lookup(args.label, collector())
     if volume is None:
         return 1
-    need_root(["unmount", args.label])
+    flags = ["--keep-unmounted"] if args.keep_unmounted else []
+    if args.json:
+        flags.append("--json")
+    need_root(["unmount", volume.device.device, *flags])
     try:
         unmount_volume(
             volume,
@@ -246,7 +281,15 @@ def _cmd_eject(args: argparse.Namespace, collector: Callable[[], list[Volume]]) 
     volume = _lookup(args.label, collector())
     if volume is None:
         return 1
-    need_root(["eject", args.label])
+    if volume.state != "unmounted":
+        print(
+            f"ntfsmnt: {volume.device.label} is still mounted. "
+            "Unmount it first, then eject.",
+            file=sys.stderr,
+        )
+        return 1
+    flags = ["--json"] if args.json else []
+    need_root(["eject", volume.device.device, *flags])
     try:
         eject_volume(
             volume,
@@ -283,6 +326,9 @@ def main(
     try:
         return COMMANDS[args.command](args, collector or _discover)
     except VolumeError as exc:
+        print(f"ntfsmnt: {exc}", file=sys.stderr)
+        return 1
+    except (OSError, subprocess.CalledProcessError) as exc:
         print(f"ntfsmnt: {exc}", file=sys.stderr)
         return 1
 
