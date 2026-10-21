@@ -1,0 +1,291 @@
+"""Command line interface.
+
+Read-only subcommands (``list``, ``status``, ``doctor``) run unprivileged.
+Mutating ones re-exec through sudo via ``need_root``, but only after the volume
+has been resolved and any destructive option has been confirmed, so a typo or a
+refused confirmation never pays for a privilege prompt.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from collections.abc import Callable, Sequence
+
+from ntfsmnt.diskutil import read_all_infos
+from ntfsmnt.doctor import Check, Env, hard_failures, run_checks
+from ntfsmnt.mounter import MountFailed, MountResult, mount_volume
+from ntfsmnt.mounttable import read_mount_table
+from ntfsmnt.privileged import need_root
+from ntfsmnt.unmounter import UnmountFailed, eject_volume, unmount_volume
+from ntfsmnt.volumes import (
+    AmbiguousVolume,
+    NoSuchVolume,
+    Volume,
+    VolumeError,
+    build_volumes,
+    resolve,
+)
+
+HEADERS = ("DEVICE", "LABEL", "SIZE", "STATE", "MOUNT")
+
+
+def real_run(argv: list[str]) -> tuple[int, str]:
+    """Run a command the way every injected runner does: never raise."""
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True)
+    except OSError as exc:
+        return (127, str(exc))
+    return (proc.returncode, (proc.stdout or "") + (proc.stderr or ""))
+
+
+def _discover() -> list[Volume]:
+    return build_volumes(read_all_infos(), read_mount_table())
+
+
+def _as_dict(volume: Volume) -> dict:
+    return {
+        "device": volume.device.device,
+        "label": volume.device.label,
+        "uuid": volume.device.uuid,
+        "size": int(volume.device.size),
+        "state": volume.state,
+        "mount_point": volume.mount_point,
+    }
+
+
+def render(volumes: Sequence[Volume], as_json: bool) -> str:
+    if as_json:
+        return json.dumps([_as_dict(volume) for volume in volumes])
+    rows = [
+        [
+            volume.device.device,
+            volume.device.label,
+            str(volume.device.size),
+            volume.state,
+            volume.mount_point or "-",
+        ]
+        for volume in volumes
+    ]
+    widths = [max(len(row[i]) for row in [HEADERS, *rows]) for i in range(len(HEADERS))]
+    return "\n".join(
+        "  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip()
+        for row in [HEADERS, *rows]
+    )
+
+
+def _lookup(query: str, volumes: Sequence[Volume]) -> Volume | None:
+    """Resolve ``query`` or report why it failed; ``None`` means return 1."""
+    try:
+        return resolve(query, volumes)
+    except AmbiguousVolume as exc:
+        print(f"ntfsmnt: '{query}' matches multiple volumes:", file=sys.stderr)
+        for candidate in exc.candidates:
+            print(
+                f"{candidate.device.label} {candidate.device.device} "
+                f"{candidate.mount_point or '-'}",
+                file=sys.stderr,
+            )
+    except NoSuchVolume:
+        print(f"ntfsmnt: no NTFS volume matching '{query}'", file=sys.stderr)
+    return None
+
+
+def _confirm(label: str) -> None:
+    answer = input(f"Type the volume label ({label}) to confirm: ")
+    if answer != label:
+        print(f"ntfsmnt: confirmation failed for '{label}'", file=sys.stderr)
+        raise SystemExit(2)
+
+
+def _doctor_env() -> Env:
+    return Env(
+        path_exists=os.path.exists,
+        run=real_run,
+        euid=os.geteuid(),
+        linkage=lambda path: real_run(["otool", "-L", path])[1],
+        first_device=lambda: next((d.device for d in read_all_infos()), None),
+    )
+
+
+def _print_checks(checks: Sequence[Check]) -> None:
+    for check in checks:
+        status = "ok" if check.ok else "FAIL"
+        print(f"{status} {check.name}: {check.detail}")
+        if check.fix:
+            print(f"fix: {check.fix}")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ntfsmnt", description="Mount NTFS volumes read-write on macOS."
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    for name, help_text in (
+        ("list", "list NTFS volumes"),
+        ("doctor", "check the host environment"),
+    ):
+        command = sub.add_parser(name, help=help_text)
+        command.add_argument("--json", action="store_true")
+
+    status = sub.add_parser("status", help="show one volume")
+    status.add_argument("label")
+    status.add_argument("--json", action="store_true")
+
+    mount = sub.add_parser("mount", help="mount a volume read-write")
+    mount.add_argument("label")
+    mount.add_argument("--recover", action="store_true")
+    mount.add_argument("--remove-hiberfile", action="store_true")
+    mount.add_argument("--json", action="store_true")
+
+    unmount = sub.add_parser("unmount", help="restore Apple's read-only mount")
+    unmount.add_argument("label")
+    unmount.add_argument("--keep-unmounted", action="store_true")
+    unmount.add_argument("--json", action="store_true")
+
+    eject = sub.add_parser("eject", help="eject an unmounted volume")
+    eject.add_argument("label")
+    eject.add_argument("--json", action="store_true")
+
+    return parser
+
+
+def _cmd_list(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
+    print(render(collector(), args.json))
+    return 0
+
+
+def _cmd_status(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
+    volume = _lookup(args.label, collector())
+    if volume is None:
+        return 1
+    if args.json:
+        print(json.dumps(_as_dict(volume)))
+    else:
+        print(
+            f"{volume.device.label} {volume.state} {volume.mount_point or '-'} "
+            f"{volume.device.device}"
+        )
+    return 0
+
+
+def _cmd_doctor(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
+    checks = run_checks(_doctor_env())
+    if args.json:
+        print(
+            json.dumps(
+                [
+                    {"name": c.name, "ok": c.ok, "detail": c.detail, "fix": c.fix}
+                    for c in checks
+                ]
+            )
+        )
+    else:
+        _print_checks(checks)
+    return 1 if hard_failures(checks) else 0
+
+
+def _cmd_mount(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
+    volume = _lookup(args.label, collector())
+    if volume is None:
+        return 1
+    label = volume.device.label
+    if args.recover or args.remove_hiberfile:
+        _confirm(label)
+    need_root(["mount", args.label])
+    try:
+        result: MountResult = mount_volume(
+            volume,
+            uid=os.getuid(),
+            gid=os.getgid(),
+            run=real_run,
+            mounts=read_mount_table,
+            sleep=time.sleep,
+            recover=args.recover,
+            remove_hiberfile=args.remove_hiberfile,
+        )
+    except MountFailed as exc:
+        print(f"ntfsmnt: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"mount_point": result.mount_point, "pid": result.pid}))
+    else:
+        print(f"mounted {label} at {result.mount_point}")
+    return 0
+
+
+def _cmd_unmount(
+    args: argparse.Namespace, collector: Callable[[], list[Volume]]
+) -> int:
+    volume = _lookup(args.label, collector())
+    if volume is None:
+        return 1
+    need_root(["unmount", args.label])
+    try:
+        unmount_volume(
+            volume,
+            run=real_run,
+            mounts=read_mount_table,
+            sleep=time.sleep,
+            keep_unmounted=args.keep_unmounted,
+        )
+    except UnmountFailed as exc:
+        print(f"ntfsmnt: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"ok": True}))
+    else:
+        print(f"unmounted {volume.device.label}")
+    return 0
+
+
+def _cmd_eject(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
+    volume = _lookup(args.label, collector())
+    if volume is None:
+        return 1
+    need_root(["eject", args.label])
+    try:
+        eject_volume(
+            volume,
+            run=real_run,
+            mounts=read_mount_table,
+            sleep=time.sleep,
+        )
+    except UnmountFailed as exc:
+        print(f"ntfsmnt: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"ok": True}))
+    else:
+        print(f"ejected {volume.device.label}")
+    return 0
+
+
+COMMANDS = {
+    "list": _cmd_list,
+    "status": _cmd_status,
+    "doctor": _cmd_doctor,
+    "mount": _cmd_mount,
+    "unmount": _cmd_unmount,
+    "eject": _cmd_eject,
+}
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    collector: Callable[[], list[Volume]] | None = None,
+) -> int:
+    args = _build_parser().parse_args(argv)
+    try:
+        return COMMANDS[args.command](args, collector or _discover)
+    except VolumeError as exc:
+        print(f"ntfsmnt: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

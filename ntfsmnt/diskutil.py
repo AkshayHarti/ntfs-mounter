@@ -20,3 +20,18 @@ def parse_info_plist(raw: bytes) -> Device:
 def read_info(identifier: str) -> Device:
     raw = subprocess.check_output(["diskutil", "info", "-plist", identifier])
     return parse_info_plist(raw)
+
+
+def parse_list_plist(raw: bytes) -> list[str]:
+    listing = plistlib.loads(raw)
+    identifiers: list[str] = []
+    for disk in listing.get("AllDisksAndPartitions", []):
+        for partition in disk.get("Partitions", []):
+            if (partition.get("Content") or "").lower() == "windows_ntfs":
+                identifiers.append(partition["DeviceIdentifier"])
+    return identifiers
+
+
+def read_all_infos() -> list[Device]:
+    raw = subprocess.check_output(["diskutil", "list", "-plist"])
+    return [read_info(identifier) for identifier in parse_list_plist(raw)]
