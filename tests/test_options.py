@@ -40,6 +40,30 @@ def test_classify_hibernated():
     assert "hibernat" in msg.lower() and "--remove-hiberfile" in msg
 
 
+def test_classify_hibernated_with_trailing_eperm():
+    stderr = (
+        "The disk contains an unclean file system (0, 0).\n"
+        "Metadata kept in Windows cache, refused to mount.\n"
+        "Failed to mount '/dev/sdb1': Operation not permitted\n"
+        "The NTFS partition is in an unsafe state. Please resume and shutdown\n"
+        "Windows fully (no hibernation or fast restarting), or mount the volume\n"
+    )
+    msg = classify_mount_failure(returncode=14, stderr=stderr)
+    assert "--remove-hiberfile" in msg
+    assert "Full Disk Access" not in msg
+
+
+def test_classify_unclean_with_trailing_eperm():
+    stderr = (
+        "The disk contains an unclean file system (0, 0).\n"
+        "Metadata kept in Windows cache, refused to mount.\n"
+        "Failed to mount '/dev/sdb1': Operation not permitted\n"
+    )
+    msg = classify_mount_failure(returncode=14, stderr=stderr)
+    assert "--recover" in msg
+    assert "Full Disk Access" not in msg
+
+
 def test_classify_busy_unclean_and_generic():
     busy = classify_mount_failure(returncode=16, stderr="Resource busy")
     assert "mounted" in busy or "open" in busy

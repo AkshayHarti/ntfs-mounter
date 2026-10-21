@@ -27,25 +27,28 @@ def build_mount_args(
 
 def classify_mount_failure(*, returncode: int, stderr: str) -> str:
     text = stderr.lower()
-    if "operation not permitted" in text or "eperm" in text:
-        return (
-            "Permission denied opening the disk. Grant Full Disk Access to your "
-            "terminal app in System Settings > Privacy & Security, then try again."
-        )
+    # Specific, actionable causes first: ntfs-3g reports hibernated and dirty
+    # volumes with a trailing "Operation not permitted", so EPERM alone must not
+    # win, or the user is sent to Full Disk Access for a non-permission problem.
     if "hibernat" in text:
         return (
             "The volume is hibernated. Re-run with --remove-hiberfile to discard "
             "the hibernation file and mount it."
+        )
+    if "unclean" in text or "dirty" in text:
+        return (
+            "The volume is marked dirty. Re-run with --recover to let ntfs-3g "
+            "replay its journal and mount it."
         )
     if "busy" in text or "in use" in text:
         return (
             "The volume is already mounted or files on it are open. Unmount it or "
             "close those files, then try again."
         )
-    if "unclean" in text or "dirty" in text:
+    if "operation not permitted" in text or "eperm" in text:
         return (
-            "The volume is marked dirty. Re-run with --recover to let ntfs-3g "
-            "replay its journal and mount it."
+            "Permission denied opening the disk. Grant Full Disk Access to your "
+            "terminal app in System Settings > Privacy & Security, then try again."
         )
     detail = next((line.strip() for line in stderr.splitlines() if line.strip()), "")
     suffix = f": {detail}" if detail else ""
