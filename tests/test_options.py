@@ -1,0 +1,51 @@
+from ntfsmnt.options import build_mount_args, classify_mount_failure
+
+
+def test_defaults_exclude_destructive_flags():
+    args = build_mount_args("/dev/disk4s1", "/Volumes/HD1", uid=501, gid=20, label="HD1")
+    assert args[0] == "/usr/local/bin/ntfs-3g"
+    assert args[1:3] == ["/dev/disk4s1", "/Volumes/HD1"]
+    assert args[3] == "-o"
+    opts = next(a for a in args if a.startswith("uid="))
+    assert "recover" not in opts and "remove_hiberfile" not in opts
+    assert "uid=501,gid=20,umask=022" in opts
+    assert "volname=HD1" in opts
+
+
+def test_flags_are_opt_in():
+    args = build_mount_args("/dev/disk4s1", "/m", uid=1, gid=1, label="X", recover=True)
+    assert "recover" in next(a for a in args if a.startswith("uid="))
+
+
+def test_remove_hiberfile_is_opt_in():
+    args = build_mount_args(
+        "/dev/disk4s1", "/m", uid=1, gid=1, label="X", remove_hiberfile=True
+    )
+    opts = next(a for a in args if a.startswith("uid="))
+    assert "remove_hiberfile" in opts
+    assert "recover" not in opts
+
+
+def test_classify_eperm_points_at_fda():
+    msg = classify_mount_failure(
+        returncode=14, stderr="Error opening '/dev/disk4s1': Operation not permitted"
+    )
+    assert "Full Disk Access" in msg
+
+
+def test_classify_hibernated():
+    msg = classify_mount_failure(
+        returncode=14, stderr="Volume is hibernated. Run chkdsk /f"
+    )
+    assert "hibernat" in msg.lower() and "--remove-hiberfile" in msg
+
+
+def test_classify_busy_unclean_and_generic():
+    busy = classify_mount_failure(returncode=16, stderr="Resource busy")
+    assert "mounted" in busy or "open" in busy
+
+    dirty = classify_mount_failure(returncode=14, stderr="volume is dirty")
+    assert "--recover" in dirty
+
+    generic = classify_mount_failure(returncode=19, stderr="\n  something odd happened\n")
+    assert "19" in generic and "something odd happened" in generic
