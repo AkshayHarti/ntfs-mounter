@@ -48,6 +48,14 @@ def _has_our_mount(entries: list[MountEntry], mount_point: str) -> bool:
     return any(_is_ours(e) and e.mount_point == mount_point for e in entries)
 
 
+def _safe_mounts(mounts: Callable[[], list[MountEntry]]) -> list[MountEntry]:
+    """Read the mount table without letting a broken `mount` escape a failure path."""
+    try:
+        return mounts()
+    except Exception:
+        return []
+
+
 def _ensure_mount_point(mount_point: str) -> None:
     Path(mount_point).mkdir(parents=True, exist_ok=True)
 
@@ -92,10 +100,10 @@ def _wait_for_mount(
     sleep: Callable[[float], None],
 ) -> bool:
     for _ in range(max(1, timeout)):
-        if _has_our_mount(mounts(), mount_point):
+        if _has_our_mount(_safe_mounts(mounts), mount_point):
             return True
         sleep(1)
-    return _has_our_mount(mounts(), mount_point)
+    return _has_our_mount(_safe_mounts(mounts), mount_point)
 
 
 def _evict_apple_remounts(
@@ -105,7 +113,7 @@ def _evict_apple_remounts(
     mounts: Callable[[], list[MountEntry]],
     run: Callable[[list[str]], tuple[int, str]],
 ) -> None:
-    for entry in mounts():
+    for entry in _safe_mounts(mounts):
         if entry.source == device_path and entry.mount_point != mount_point:
             _unmount(entry.mount_point, run=run)
 
@@ -119,7 +127,7 @@ def _restore_read_only(
 ) -> None:
     """Tear down our mount, then put Apple's read-only mount back, last of all."""
     if _has_our_mount(entries, mount_point):
-        run(["diskutil", "unmount", mount_point])
+        _unmount(mount_point, run=run)
     run(["diskutil", "mount", device_path])
 
 
@@ -178,60 +186,76 @@ def mount_volume(
         if _serves_device(entry, device, mount_point) and not _is_ours(entry):
             _unmount(entry.mount_point, run=run)
 
-    # 3. Wait for the device node to settle after the unmount.
-    if not _wait_for_device(device.device, run=run, sleep=sleep):
-        _fail(
-            f"The device {device.device} for {device.label} did not reappear. "
-            "Is the disk still connected?",
-            device_path=device.device,
-            mount_point=mount_point,
-            entries=mounts(),
-            run=run,
-        )
-
-    # 4. Mount read-write through ntfs-3g.
-    returncode, stderr = run(
-        build_mount_args(
-            device.device,
-            mount_point,
-            uid=uid,
-            gid=gid,
-            label=device.label,
-            recover=recover,
-            remove_hiberfile=remove_hiberfile,
-        )
-    )
-
-    # 5. Confirm the FUSE-T mount at the mount point actually appeared.
-    if returncode != 0 or not _wait_for_mount(
-        mounts, mount_point, timeout=timeout, sleep=sleep
-    ):
-        _fail(
-            classify_mount_failure(returncode=returncode, stderr=stderr),
-            device_path=device.device,
-            mount_point=mount_point,
-            entries=mounts(),
-            run=run,
-        )
-
-    # 6. Apple can remount read-only at any moment; evict its competition, then
-    # re-read the table so the failure path below decides on reality.
-    _evict_apple_remounts(device.device, mount_point, mounts=mounts, run=run)
-    entries = mounts()
-
-    # 7. Prove the mount is writable, not merely present.
+    # From here Apple's mount has been evicted: every exit must restore it.
     try:
-        (probe or _write_probe)(mount_point)
-    except OSError:
-        _fail(
-            f"{device.label} mounted at {mount_point} but is not writable. "
-            "Apple's read-only mount was restored.",
-            device_path=device.device,
-            mount_point=mount_point,
-            entries=entries,
-            run=run,
+        # 3. Wait for the device node to settle after the unmount.
+        if not _wait_for_device(device.device, run=run, sleep=sleep):
+            _fail(
+                f"The device {device.device} for {device.label} did not reappear. "
+                "Is the disk still connected?",
+                device_path=device.device,
+                mount_point=mount_point,
+                entries=_safe_mounts(mounts),
+                run=run,
+            )
+
+        # 4. Mount read-write through ntfs-3g.
+        returncode, stderr = run(
+            build_mount_args(
+                device.device,
+                mount_point,
+                uid=uid,
+                gid=gid,
+                label=device.label,
+                recover=recover,
+                remove_hiberfile=remove_hiberfile,
+            )
         )
 
-    # 9. Report the ntfs-3g process serving the mount, when we can see it.
-    pid = _parse_pid(run(["pgrep", "-f", device.device])[1])
-    return MountResult(volume=volume, mount_point=mount_point, pid=pid)
+        # 5. Confirm the FUSE-T mount at the mount point actually appeared.
+        if returncode != 0 or not _wait_for_mount(
+            mounts, mount_point, timeout=timeout, sleep=sleep
+        ):
+            _fail(
+                classify_mount_failure(returncode=returncode, stderr=stderr),
+                device_path=device.device,
+                mount_point=mount_point,
+                entries=_safe_mounts(mounts),
+                run=run,
+            )
+
+        # 6. Apple can remount read-only at any moment; evict its competition,
+        # then re-read the table so the failure path below decides on reality.
+        _evict_apple_remounts(device.device, mount_point, mounts=mounts, run=run)
+        entries = _safe_mounts(mounts)
+
+        # 7. Prove the mount is writable, not merely present.
+        try:
+            (probe or _write_probe)(mount_point)
+        except Exception as exc:
+            _fail(
+                f"{device.label} mounted at {mount_point} but the write check "
+                f"failed (the volume is not writable): {exc}. "
+                "Apple's read-only mount was restored.",
+                device_path=device.device,
+                mount_point=mount_point,
+                entries=entries,
+                run=run,
+            )
+
+        # 9. Report the ntfs-3g process serving the mount, when we can see it.
+        pid = _parse_pid(run(["pgrep", "-f", device.device])[1])
+        return MountResult(volume=volume, mount_point=mount_point, pid=pid)
+    except MountFailed:
+        # _fail already restored the read-only mount before raising.
+        raise
+    except Exception:
+        # Unexpected failure (e.g. the mount table cannot be read): put Apple's
+        # read-only mount back before letting the exception escape.
+        _restore_read_only(
+            device_path=device.device,
+            mount_point=mount_point,
+            entries=_safe_mounts(mounts),
+            run=run,
+        )
+        raise

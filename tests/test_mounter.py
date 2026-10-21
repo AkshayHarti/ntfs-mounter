@@ -1,3 +1,5 @@
+from subprocess import CalledProcessError
+
 import pytest
 
 from ntfsmnt import mounter
@@ -45,8 +47,10 @@ class FakeEnv:
         self._apple_returns = False
         self._apple_returned = False
         self._device_present = True
-        self._probe_error: OSError | None = None
+        self._probe_error: Exception | None = None
         self._diskutil_unmount_rc = 0
+        self._mount_reads = 0
+        self._mounts_error_from: int | None = None
 
     # --- injected callables -------------------------------------------------
     def run(self, argv):
@@ -76,6 +80,10 @@ class FakeEnv:
         raise AssertionError(f"unexpected command: {argv}")
 
     def mounts(self):
+        self._mount_reads += 1
+        error_from = self._mounts_error_from
+        if error_from is not None and self._mount_reads >= error_from:
+            raise CalledProcessError(1, ["mount"])
         if self.ntfs3g_calls and self._apple_returns and not self._apple_returned:
             self._apple_returned = True
             self.entries.append(APPLE_REMOUNT)
@@ -112,6 +120,9 @@ class FakeEnv:
         device_present=True,
         probe_error=None,
         diskutil_unmount_rc=0,
+        mounts_error_from=None,
+        recover=False,
+        remove_hiberfile=False,
         timeout=30,
     ):
         self.entries = {"ro": [APPLE_MOUNT], "rw": [OURS], "unmounted": []}[state]
@@ -121,6 +132,7 @@ class FakeEnv:
         self._device_present = device_present
         self._probe_error = probe_error
         self._diskutil_unmount_rc = diskutil_unmount_rc
+        self._mounts_error_from = mounts_error_from
         return mount_volume(
             Volume(device=DEVICE, mounts=tuple(self.entries)),
             uid=501,
@@ -130,14 +142,25 @@ class FakeEnv:
             sleep=self.sleep,
             timeout=timeout,
             probe=self.probe,
+            recover=recover,
+            remove_hiberfile=remove_hiberfile,
         )
 
 
 @pytest.fixture(autouse=True)
 def mount_point_dirs(monkeypatch):
-    """Keep `mkdir` off the host: no test may create anything under /Volumes."""
+    """Keep host writes out of the tests: no mkdir, and no real write probe."""
     created: list[str] = []
     monkeypatch.setattr(mounter, "_ensure_mount_point", created.append)
+
+    def unexpected_real_probe(mount_point):
+        # `pytest.fail` derives from BaseException, so it escapes the mounter's
+        # `except Exception` guard and fails the test loudly.
+        pytest.fail(f"test used the real write probe on {mount_point}")
+
+    # `mount_volume` resolves this through the module attribute; the tests that
+    # exercise the real probe call the directly imported function instead.
+    monkeypatch.setattr(mounter, "_write_probe", unexpected_real_probe)
     return created
 
 
@@ -228,9 +251,48 @@ def test_probe_failure_restores_read_only(fake_env):
     message = str(err.value).lower()
     assert "mounted" in message
     assert "not writable" in message
+    assert "write check failed" in message
     assert [c for c in fake_env.calls if c == ["diskutil", "unmount", MOUNT_POINT]]
     assert fake_env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
     assert fake_env.state("HD1") == "ro"
+
+
+def test_unexpected_probe_error_restores_read_only(fake_env):
+    with pytest.raises(MountFailed) as err:
+        fake_env.mount(state="ro", probe_error=RuntimeError("probe blew up"))
+
+    message = str(err.value)
+    assert "write check failed" in message
+    assert "probe blew up" in message
+    assert fake_env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
+    assert fake_env.state("HD1") == "ro"
+
+
+def test_restore_falls_back_to_umount_before_replacing_apple_mount(fake_env):
+    with pytest.raises(MountFailed):
+        fake_env.mount(
+            state="ro", probe_error=OSError(5, "I/O error"), diskutil_unmount_rc=1
+        )
+
+    ntfs3g_index = next(i for i, c in enumerate(fake_env.calls) if c[0] == NTFS3G)
+    post_mount_umounts = [
+        i
+        for i, c in enumerate(fake_env.calls)
+        if i > ntfs3g_index and c[:2] == ["umount", "-f"]
+    ]
+    assert post_mount_umounts, "restore path must fall back to umount -f"
+    assert fake_env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
+    assert fake_env.state("HD1") == "ro"
+
+
+def test_mount_table_failure_still_restores_read_only(fake_env):
+    # `read_mount_table` runs `mount`, which can itself fail. From the third read
+    # on (the post-mount poll) the table is broken, so verification cannot pass.
+    with pytest.raises(MountFailed):
+        fake_env.mount(state="ro", mounts_error_from=3)
+
+    assert fake_env.ntfs3g_invocations() == 1
+    assert fake_env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
 
 
 def test_device_never_appears_raises_without_mounting(fake_env):
@@ -264,6 +326,25 @@ def test_parse_pid_takes_first_integer_token():
     assert _parse_pid("4242\n") == 4242
     assert _parse_pid("pgrep: some warning\n4242\n") == 4242
     assert _parse_pid("no such process") is None
+
+
+@pytest.mark.parametrize(
+    ("flags", "present", "absent"),
+    [
+        ({}, [], ["recover", "remove_hiberfile"]),
+        ({"recover": True}, ["recover"], ["remove_hiberfile"]),
+        ({"remove_hiberfile": True}, ["remove_hiberfile"], ["recover"]),
+    ],
+)
+def test_destructive_options_are_opt_in(fake_env, flags, present, absent):
+    fake_env.mount(state="ro", **flags)
+
+    argv = next(call for call in fake_env.calls if call[0] == NTFS3G)
+    options = argv[argv.index("-o") + 1].split(",")
+    for token in present:
+        assert token in options
+    for token in absent:
+        assert token not in options
 
 
 def test_real_probe_writes_reads_back_and_cleans_up(tmp_path):
