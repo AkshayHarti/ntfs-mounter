@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 
 from ntfsmnt.diskutil import read_all_infos
 from ntfsmnt.doctor import Check, Env, hard_failures, run_checks
+from ntfsmnt.identity import parse_pid, pid_pattern
 from ntfsmnt.mounter import MountFailed, MountResult, mount_volume
 from ntfsmnt.mounttable import read_mount_table
 from ntfsmnt.privileged import need_root
@@ -99,8 +100,11 @@ def _lookup(query: str, volumes: Sequence[Volume]) -> Volume | None:
 
 
 def _confirm(label: str) -> None:
+    # stdout is reserved for the command's output (JSON with --json), so the
+    # prompt goes to stderr and `input()` is called without one of its own.
+    print(f"Type the volume label ({label}) to confirm: ", end="", file=sys.stderr)
     try:
-        answer = input(f"Type the volume label ({label}) to confirm: ")
+        answer = input()
     except EOFError:
         print(
             "ntfsmnt: cannot confirm without a terminal; refusing to continue",
@@ -187,12 +191,19 @@ def _cmd_status(args: argparse.Namespace, collector: Callable[[], list[Volume]])
     volume = _lookup(args.label, collector())
     if volume is None:
         return 1
+    driver = {"rw": "fuse-t", "ro": "fskit", "unmounted": "-"}[volume.state]
+    pid = (
+        parse_pid(real_run(["pgrep", "-f", pid_pattern(volume.device.device)])[1])
+        if volume.state == "rw"
+        else None
+    )
     if args.json:
-        print(json.dumps(_as_dict(volume)))
+        print(json.dumps({**_as_dict(volume), "driver": driver, "pid": pid}))
     else:
         print(
-            f"{volume.device.label} {volume.state} {volume.mount_point or '-'} "
-            f"{volume.device.device}"
+            f"{volume.device.label} {volume.state} {driver} "
+            f"{volume.mount_point or '-'} {volume.device.device} "
+            f"{'-' if pid is None else pid}"
         )
     return 0
 
@@ -224,7 +235,9 @@ def _cmd_mount(args: argparse.Namespace, collector: Callable[[], list[Volume]]) 
         flags.append("--remove-hiberfile")
     if args.json:
         flags.append("--json")
-    confirmed = args.confirmed
+    # --confirmed is forwarded to the sudo child, so it only counts when we are
+    # that child: an unprivileged run with --confirmed must still prompt.
+    confirmed = args.confirmed and os.geteuid() == 0
     if args.remove_hiberfile and not confirmed:
         # Only --remove-hiberfile discards data; --recover must stay non-interactive.
         _confirm(label)
@@ -265,7 +278,7 @@ def _cmd_unmount(
         flags.append("--json")
     need_root(["unmount", volume.device.device, *flags])
     try:
-        unmount_volume(
+        restored = unmount_volume(
             volume,
             run=real_run,
             mounts=read_mount_table,
@@ -276,10 +289,16 @@ def _cmd_unmount(
         print(f"ntfsmnt: {exc}", file=sys.stderr)
         return 1
     if args.json:
-        print(json.dumps({"ok": True}))
-    else:
+        print(json.dumps({"ok": True, "restored": restored}))
+    elif restored:
         print(f"unmounted {volume.device.label}")
-    return 0
+    else:
+        print(
+            f"ntfsmnt: unmounted {volume.device.label} (read-only restore failed; "
+            f"run sudo diskutil mount {volume.device.device})",
+            file=sys.stderr,
+        )
+    return 0 if restored else 1
 
 
 def _cmd_eject(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:

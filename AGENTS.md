@@ -13,7 +13,7 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 ## Commands
 
 - Install deps: `uv sync`
-- Test: `uv run pytest -q` (92 tests)
+- Test: `uv run pytest -q` (125 tests)
 - Manual acceptance: `tests/manual/acceptance.md` (real hardware, root, Full
   Disk Access terminal)
 - Build/run: `uv run ntfsmnt ...`
@@ -27,6 +27,7 @@ ntfsmnt/
   cli.py           argument parsing, command dispatch, JSON rendering
   diskutil.py      plist parsing for diskutil list/info
   mounttable.py    parsing of `mount` output, including fuse-t: lines
+  identity.py      corroborate a fuse-t: mount with its serving ntfs-3g process
   volumes.py       Volume model, build_volumes, resolve by label/uuid/device/mount
   options.py       ntfs-3g argument assembly and stderr classification
   doctor.py        environment checks with actionable fixes
@@ -47,6 +48,8 @@ tests/
 
 - `diskutil.py` / `mounttable.py` — parse live system state.
 - `volumes.py` — combine devices and mounts; determine `rw`/`ro`/`unmounted`.
+- `identity.py` — decide whether a `fuse-t:` entry is *this* device's mount by
+  asking the `ntfs-3g` process whose argv names the device.
 - `options.py` — build ntfs-3g options, classify failures (hibernated, dirty,
   busy, EPERM).
 - `doctor.py` — check the host; hard failures are `fuse-t`, `ntfs-3g`, `root`,
@@ -75,13 +78,15 @@ These are hard requirements. Do not weaken them in any change.
    *before* `need_root` so unprivileged tests never exec sudo. `--recover` is
    opt-in but not label-confirmed.
 5. **Failed mounts restore the read-only mount.** `mounter.py` evicts Apple's
-   mount, so every exit path must restore it. `_fail` and the `except Exception`
-   tail call `_restore_read_only`. A failed mount must not leave the volume
-   unmounted or half-mounted.
+   mount, so every exit path must restore it. `_fail` and the `except
+   BaseException` tail call `_restore_read_only`, which unmounts the mount point
+   unconditionally and restores last; it may claim "restored" only when the
+   mount table confirms it.
 6. **No guesses on duplicate labels.** `resolve()` raises `AmbiguousVolume` and
    the CLI lists candidates; never pick the first match.
 7. **No write without a probe.** `mounter.py` writes, reads back, and deletes
-   `.ntfsmnt-probe` before reporting success.
+   `.ntfsmnt-probe`, then checks the mount point is owned by the invoking uid
+   and gid, before reporting success.
 8. **Hibernated and dirty volumes are refused by default.** `--recover` and
    `--remove-hiberfile` are opt-in only.
 9. **All external effects go through injected callables.** Production passes

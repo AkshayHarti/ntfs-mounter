@@ -94,11 +94,62 @@ def test_status_unknown_volume_exits_1(capsys):
     assert "NOPE" in err
 
 
-def test_status_reports_label_state_and_device(capsys):
+def test_status_reports_label_state_driver_and_device(capsys):
     rc = main(["status", "HD1"], collector=fake_volumes)
     out = capsys.readouterr().out
     assert rc == 0
-    assert out.split() == ["HD1", "unmounted", "-", "/dev/disk4s1"]
+    assert out.split() == ["HD1", "unmounted", "-", "-", "/dev/disk4s1", "-"]
+
+
+def test_status_reports_fuse_t_driver_and_serving_pid(monkeypatch, capsys):
+    def run(argv):
+        assert argv == ["pgrep", "-f", "ntfs-3g .*/dev/disk4s1( |$)"]
+        return (0, "48213\n")
+
+    monkeypatch.setattr(ntfsmnt.cli, "real_run", run)
+    volumes = [make_volume(make_device(mount_point="/Volumes/HD1"), mounts=[OURS_RW])]
+
+    rc = main(["status", "HD1", "--json"], collector=lambda: volumes)
+
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["state"] == "rw"
+    assert data["driver"] == "fuse-t"
+    assert data["pid"] == 48213
+    assert data["mount_point"] == "/Volumes/HD1"
+
+
+def test_status_text_line_names_the_driver_and_pid(monkeypatch, capsys):
+    monkeypatch.setattr(ntfsmnt.cli, "real_run", lambda argv: (0, "48213\n"))
+    volumes = [make_volume(make_device(mount_point="/Volumes/HD1"), mounts=[OURS_RW])]
+
+    assert main(["status", "HD1"], collector=lambda: volumes) == 0
+
+    assert capsys.readouterr().out.split() == [
+        "HD1",
+        "rw",
+        "fuse-t",
+        "/Volumes/HD1",
+        "/dev/disk4s1",
+        "48213",
+    ]
+
+
+def test_status_reports_fskit_for_apple_read_only(monkeypatch, capsys):
+    ro = MountEntry(
+        source="/dev/disk4s1", mount_point="/Volumes/HD1", fs="ntfs", read_only=True
+    )
+    monkeypatch.setattr(
+        ntfsmnt.cli, "real_run", lambda argv: pytest.fail("ro status must not pgrep")
+    )
+    volumes = [make_volume(make_device(mount_point="/Volumes/HD1"), mounts=[ro])]
+
+    rc = main(["status", "HD1", "--json"], collector=lambda: volumes)
+
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert data["driver"] == "fskit"
+    assert data["pid"] is None
 
 
 def test_status_ambiguous_lists_candidates(capsys):
@@ -115,7 +166,7 @@ def test_status_ambiguous_lists_candidates(capsys):
 
 
 def test_mount_requires_confirmation_for_hiberfile(monkeypatch):
-    def answer(_prompt):
+    def answer():
         return "HD2"
 
     root_calls = []
@@ -127,11 +178,87 @@ def test_mount_requires_confirmation_for_hiberfile(monkeypatch):
     assert root_calls == []
 
 
+def test_confirmation_prompt_goes_to_stderr_not_json_stdout(monkeypatch, capsys):
+    prompts: list[bool] = []
+
+    def answer():
+        prompts.append(True)
+        return "HD1"
+
+    monkeypatch.setattr("builtins.input", answer)
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    monkeypatch.setattr(
+        ntfsmnt.cli,
+        "mount_volume",
+        lambda volume, **kwargs: MountResult(
+            volume=volume, mount_point="/Volumes/HD1", pid=42
+        ),
+    )
+
+    rc = main(
+        ["mount", "HD1", "--remove-hiberfile", "--json"], collector=fake_volumes
+    )
+    out, err = capsys.readouterr()
+
+    assert rc == 0
+    assert prompts == [True]
+    assert json.loads(out) == {"mount_point": "/Volumes/HD1", "pid": 42}
+    assert "Type the volume label (HD1) to confirm:" in err
+
+
+def test_unprivileged_confirmed_flag_still_prompts(monkeypatch):
+    # --confirmed is only trustworthy in the privileged child of the re-exec.
+    monkeypatch.setattr(ntfsmnt.cli.os, "geteuid", lambda: 501)
+    prompts: list[bool] = []
+
+    def answer():
+        prompts.append(True)
+        return "HD1"
+
+    monkeypatch.setattr("builtins.input", answer)
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    monkeypatch.setattr(
+        ntfsmnt.cli,
+        "mount_volume",
+        lambda volume, **kwargs: MountResult(
+            volume=volume, mount_point="/Volumes/HD1", pid=None
+        ),
+    )
+
+    rc = main(
+        ["mount", "HD1", "--remove-hiberfile", "--confirmed"], collector=fake_volumes
+    )
+
+    assert rc == 0
+    assert prompts == [True]
+
+
+def test_root_with_confirmed_does_not_prompt(monkeypatch):
+    monkeypatch.setattr(ntfsmnt.cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        "builtins.input", lambda: pytest.fail("root --confirmed must not prompt")
+    )
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    monkeypatch.setattr(
+        ntfsmnt.cli,
+        "mount_volume",
+        lambda volume, **kwargs: MountResult(
+            volume=volume, mount_point="/Volumes/HD1", pid=None
+        ),
+    )
+
+    rc = main(
+        ["mount", "HD1", "--remove-hiberfile", "--confirmed"], collector=fake_volumes
+    )
+
+    assert rc == 0
+
+
 def test_confirm_matching_label_reaches_need_root(monkeypatch, capsys):
     root_calls = []
     mounted = {}
 
-    monkeypatch.setattr("builtins.input", lambda _prompt: "HD1")
+    monkeypatch.setattr("builtins.input", lambda: "HD1")
     monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
 
     def fake_mount(volume, **kwargs):
@@ -155,7 +282,7 @@ def test_reexec_argv_replays_every_flag(monkeypatch, capsys):
     root_calls = []
     mounted = {}
 
-    monkeypatch.setattr("builtins.input", lambda _prompt: "HD1")
+    monkeypatch.setattr("builtins.input", lambda: "HD1")
     monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
 
     def fake_mount(volume, **kwargs):
@@ -182,8 +309,9 @@ def test_reexec_argv_replays_every_flag(monkeypatch, capsys):
 
     # Replay exactly what the sudo child receives: same flags, no second prompt.
     monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    monkeypatch.setattr(ntfsmnt.cli.os, "geteuid", lambda: 0)  # the child is root
     monkeypatch.setattr(
-        "builtins.input", lambda _prompt: pytest.fail("the child prompted twice")
+        "builtins.input", lambda: pytest.fail("the child prompted twice")
     )
     rc = main(argv, collector=fake_volumes)
     out = capsys.readouterr().out
@@ -200,6 +328,7 @@ def test_unmount_reexec_forwards_keep_unmounted(monkeypatch, capsys):
 
     def fake_unmount(volume, **kwargs):
         unmounted.update(kwargs)
+        return True
 
     monkeypatch.setattr(ntfsmnt.cli, "unmount_volume", fake_unmount)
     rc = main(["unmount", "HD1", "--keep-unmounted"], collector=fake_volumes)
@@ -249,7 +378,7 @@ def test_malformed_sudo_ids_fall_back_to_current(monkeypatch):
 
 def test_recover_does_not_prompt(monkeypatch):
     monkeypatch.setattr(
-        "builtins.input", lambda _prompt: pytest.fail("--recover must not prompt")
+        "builtins.input", lambda: pytest.fail("--recover must not prompt")
     )
     monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
     monkeypatch.setattr(
@@ -265,7 +394,7 @@ def test_recover_does_not_prompt(monkeypatch):
 def test_confirm_eof_exits_2(monkeypatch):
     root_calls = []
 
-    def no_stdin(_prompt):
+    def no_stdin():
         raise EOFError
 
     monkeypatch.setattr("builtins.input", no_stdin)
@@ -345,11 +474,36 @@ def test_mount_json_output(monkeypatch, capsys):
 def test_unmount_json_output(monkeypatch, capsys):
     root_calls = []
     monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
-    monkeypatch.setattr(ntfsmnt.cli, "unmount_volume", lambda volume, **kwargs: None)
+    monkeypatch.setattr(ntfsmnt.cli, "unmount_volume", lambda volume, **kwargs: True)
     rc = main(["unmount", "HD1", "--json"], collector=fake_volumes)
     assert rc == 0
     assert root_calls == [["unmount", "/dev/disk4s1", "--json"]]
-    assert json.loads(capsys.readouterr().out) == {"ok": True}
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "restored": True}
+
+
+def test_unmount_restore_failure_reports_and_exits_1(monkeypatch, capsys):
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    monkeypatch.setattr(ntfsmnt.cli, "unmount_volume", lambda volume, **kwargs: False)
+
+    rc = main(["unmount", "HD1"], collector=fake_volumes)
+
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert out == ""
+    assert "read-only restore failed" in err
+    assert "sudo diskutil mount /dev/disk4s1" in err
+
+
+def test_unmount_restore_failure_json_keeps_ok_and_reports_restored_false(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    monkeypatch.setattr(ntfsmnt.cli, "unmount_volume", lambda volume, **kwargs: False)
+
+    rc = main(["unmount", "HD1", "--json"], collector=fake_volumes)
+
+    assert rc == 1
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "restored": False}
 
 
 def test_eject_reports_success(monkeypatch, capsys):

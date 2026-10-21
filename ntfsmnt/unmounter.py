@@ -2,8 +2,9 @@
 
 Getting a volume back to Apple's read-only mount means tearing down whoever
 holds it — usually our ntfs-3g mount on FUSE-T — without ever escalating to
-SIGKILL. A busy volume is reported to the user instead of being forced; the
-read-only mount is put back only after the last unmount succeeded.
+SIGKILL. A busy volume is reported to the user instead of being forced. The
+read-only mount is put back on every exit from the teardown — success, busy, or
+interrupt — and the caller is told when that failed.
 
 Every side effect goes through the injected ``run``, ``mounts`` and ``sleep``
 callables, so the whole sequence runs without touching the host. ``run`` never
@@ -59,9 +60,7 @@ def _mount_points(
     run: Callable[[list[str]], tuple[int, str]],
 ) -> list[str]:
     """Our mounts first, then Apple's, with each mount point listed once."""
-    ours = [
-        e for e in entries if _is_ours(e) and _serves_volume(e, volume, run=run)
-    ]
+    ours = [e for e in entries if _is_ours(e) and _serves_volume(e, volume, run=run)]
     apple = [e for e in entries if e.source == volume.device.device]
     return list(dict.fromkeys(e.mount_point for e in ours + apple))
 
@@ -132,16 +131,31 @@ def unmount_volume(
     mounts: Callable[[], list[MountEntry]],
     sleep: Callable[[float], None],
     keep_unmounted: bool = False,
-) -> None:
+) -> bool:
+    """Tear down the volume's mounts and put Apple's read-only mount back.
+
+    Returns True when the read-only mount was restored, or was not needed
+    because ``keep_unmounted`` asked for the volume to stay unmounted. False
+    means the teardown succeeded but the restore did not: the caller must tell
+    the user the volume is still unmounted and how to restore it by hand.
+    """
     mount_points = _mount_points(volume, mounts(), run=run)
     if not mount_points:
-        return
+        return True
 
-    for mount_point in mount_points:
-        _unmount(mount_point, volume.device.device, run=run, sleep=sleep)
+    restored: int | None = None
+    try:
+        for mount_point in mount_points:
+            _unmount(mount_point, volume.device.device, run=run, sleep=sleep)
+    finally:
+        # Every exit from the teardown — success, a busy volume, an interrupt —
+        # must attempt the restore; only `--keep-unmounted` says not to.
+        if not keep_unmounted:
+            restored, _ = run(["diskutil", "mount", volume.device.device])
 
-    if not keep_unmounted:
-        run(["diskutil", "mount", volume.device.device])
+    if keep_unmounted:
+        return True
+    return restored == 0
 
 
 def _parent_disk(identifier: str) -> str:

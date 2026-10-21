@@ -71,12 +71,15 @@ class FakeEnv:
         self.sent_signals: list[str] = []
         self.slept: list[float] = []
         self._diskutil_unmount = (0, "")
+        self._diskutil_mount = (0, "")
         self._umount_results: list[tuple[int, str]] = []
         self._eject = (0, "")
         self._pgrep: tuple[int, str] | None = None
 
     def _has_fuse_t(self):
-        return any(e.fs == "nfs" and e.source.startswith("fuse-t:") for e in self.entries)
+        return any(
+            e.fs == "nfs" and e.source.startswith("fuse-t:") for e in self.entries
+        )
 
     # --- injected callables -------------------------------------------------
     def run(self, argv):
@@ -94,15 +97,17 @@ class FakeEnv:
                 self._remove(argv[-1])
             return returncode, stderr
         if argv[:2] == ["diskutil", "mount"]:
-            self.entries.append(
-                MountEntry(
-                    source=argv[2],
-                    mount_point=self.points.get(argv[2], MOUNT_POINT),
-                    fs="ntfs",
-                    read_only=True,
+            returncode, stderr = self._diskutil_mount
+            if returncode == 0:
+                self.entries.append(
+                    MountEntry(
+                        source=argv[2],
+                        mount_point=self.points.get(argv[2], MOUNT_POINT),
+                        fs="ntfs",
+                        read_only=True,
+                    )
                 )
-            )
-            return 0, ""
+            return returncode, stderr
         if argv[:2] == ["diskutil", "eject"]:
             return self._eject
         if argv[0] == "pgrep":
@@ -126,6 +131,9 @@ class FakeEnv:
     # --- scripting ----------------------------------------------------------
     def unmount_returns(self, returncode, output=""):
         self._diskutil_unmount = (returncode, output)
+
+    def mount_returns(self, returncode, output=""):
+        self._diskutil_mount = (returncode, output)
 
     def umount_returns(self, *results):
         self._umount_results = list(results)
@@ -160,16 +168,48 @@ class FakeEnv:
 def test_unmount_restores_read_only_by_default():
     env = FakeEnv([OURS])
 
-    unmount_volume(env.volume(), run=env.run, mounts=env.mounts, sleep=env.sleep)
+    assert (
+        unmount_volume(env.volume(), run=env.run, mounts=env.mounts, sleep=env.sleep)
+        is True
+    )
 
     assert env.state() == "ro"
     assert env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
 
 
-def test_keep_unmounted_skips_restore():
+def test_unmount_restore_failure_returns_false():
+    env = FakeEnv([OURS])
+    env.mount_returns(1, "Could not mount disk4s1")
+
+    restored = unmount_volume(
+        env.volume(), run=env.run, mounts=env.mounts, sleep=env.sleep
+    )
+
+    assert restored is False
+    assert env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
+    assert env.state() == "unmounted"
+
+
+def test_restore_is_attempted_when_a_later_mount_point_fails():
+    apple_remount = MountEntry(
+        source="/dev/disk4s1", mount_point="/Volumes/HD1 1", fs="ntfs", read_only=True
+    )
+    env = FakeEnv([OURS, apple_remount])
+    env.unmount_returns(1, "Resource busy")
+    env.umount_returns((0, ""), (1, "Resource busy"))
+    env.pgrep_returns(1, "")
+
+    with pytest.raises(UnmountFailed):
+        unmount_volume(env.volume(), run=env.run, mounts=env.mounts, sleep=env.sleep)
+
+    assert ["diskutil", "unmount", "/Volumes/HD1"] in env.calls
+    assert env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
+
+
+def test_keep_unmounted_returns_true_without_restoring():
     env = FakeEnv([OURS])
 
-    unmount_volume(
+    restored = unmount_volume(
         env.volume(),
         run=env.run,
         mounts=env.mounts,
@@ -177,6 +217,7 @@ def test_keep_unmounted_skips_restore():
         keep_unmounted=True,
     )
 
+    assert restored is True
     assert env.state() == "unmounted"
     assert not any(call[:2] == ["diskutil", "mount"] for call in env.calls)
 
@@ -234,7 +275,9 @@ def test_unmount_of_another_volume_with_the_same_label_leaves_drive_a_alone():
     env = FakeEnv([drive_a])
     volume = Volume(device=OTHER, mounts=())
 
-    unmount_volume(volume, run=env.run, mounts=env.mounts, sleep=env.sleep)
+    assert (
+        unmount_volume(volume, run=env.run, mounts=env.mounts, sleep=env.sleep) is True
+    )
 
     assert not [call for call in env.calls if call[0] in ("diskutil", "umount", "kill")]
     assert env.entries == [drive_a]
@@ -339,7 +382,8 @@ def test_has_mount_is_false_for_a_same_label_entry_served_by_another_disk():
         source="fuse-t:/HD1", mount_point=MOUNT_POINT, fs="nfs", read_only=False
     )
     env = FakeEnv([stale])
-    assert has_mount(Volume(device=OTHER, mounts=()), run=env.run, mounts=env.mounts) is False
+    volume = Volume(device=OTHER, mounts=())
+    assert has_mount(volume, run=env.run, mounts=env.mounts) is False
 
 
 def test_has_mount_is_true_when_the_serving_process_names_the_device():
@@ -347,17 +391,20 @@ def test_has_mount_is_true_when_the_serving_process_names_the_device():
         source="fuse-t:/HD1", mount_point=MOUNT_POINT, fs="nfs", read_only=False
     )
     env = FakeEnv([stale])
-    assert has_mount(Volume(device=DEVICE, mounts=()), run=env.run, mounts=env.mounts) is True
+    volume = Volume(device=DEVICE, mounts=())
+    assert has_mount(volume, run=env.run, mounts=env.mounts) is True
 
 
 def test_has_mount_is_true_for_an_apple_read_only_mount():
     env = FakeEnv([APPLE])
-    assert has_mount(Volume(device=DEVICE, mounts=()), run=env.run, mounts=env.mounts) is True
+    volume = Volume(device=DEVICE, mounts=())
+    assert has_mount(volume, run=env.run, mounts=env.mounts) is True
 
 
 def test_has_mount_is_false_when_nothing_is_mounted():
     env = FakeEnv()
-    assert has_mount(Volume(device=DEVICE, mounts=()), run=env.run, mounts=env.mounts) is False
+    volume = Volume(device=DEVICE, mounts=())
+    assert has_mount(volume, run=env.run, mounts=env.mounts) is False
 
 
 def test_eject_refuses_while_mounted():

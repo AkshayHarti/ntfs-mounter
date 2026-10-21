@@ -9,6 +9,7 @@ Every side effect goes through the injected ``run``, ``mounts``, ``sleep`` and
 ``probe`` callables, so the whole sequence runs without touching the host.
 """
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,11 @@ def _safe_mounts(mounts: Callable[[], list[MountEntry]]) -> list[MountEntry]:
 
 def _ensure_mount_point(mount_point: str) -> None:
     Path(mount_point).mkdir(parents=True, exist_ok=True)
+
+
+def _default_stat(path: str) -> os.stat_result:
+    """The real `os.stat`, resolved at call time so tests can replace it."""
+    return os.stat(path)
 
 
 def _write_probe(mount_point: str) -> None:
@@ -178,8 +184,15 @@ def mount_volume(
     recover: bool = False,
     remove_hiberfile: bool = False,
     probe: Callable[[str], None] | None = None,
+    stat: Callable[[str], os.stat_result] | None = None,
 ) -> MountResult:
     device = volume.device
+    if device.label == "":
+        # Every path from here assumes a label: it names the FUSE-T source and
+        # the default mount point. Refuse before evicting anyone's mount.
+        raise MountFailed(
+            f"{device.device}: volume has no label; relabel it before mounting"
+        )
     mount_point = volume.mount_point or f"/Volumes/{device.label}"
 
     # 1. Already served by us: succeed without touching the stack. The mount
@@ -255,6 +268,20 @@ def mount_volume(
             _fail(
                 f"{device.label} mounted at {mount_point} but the write check "
                 f"failed (the volume is not writable): {exc}.",
+                device_path=device.device,
+                mount_point=mount_point,
+                mounts=mounts,
+                run=run,
+            )
+
+        # 8. Prove the *invoking user* owns the mount. Step 7 ran as root, so a
+        # successful write there says nothing about an unprivileged write.
+        owner = (stat or _default_stat)(mount_point)
+        if (owner.st_uid, owner.st_gid) != (uid, gid):
+            _fail(
+                f"{device.label} mounted at {mount_point} but owned by "
+                f"uid {owner.st_uid}, gid {owner.st_gid}, "
+                f"expected uid {uid}, gid {gid}.",
                 device_path=device.device,
                 mount_point=mount_point,
                 mounts=mounts,

@@ -142,10 +142,16 @@ If `sudo` cannot find `uv`, use `sudo "$(command -v uv)" run ntfsmnt doctor`.
 
 ```bash
 uv run ntfsmnt status HD1
-# HD1 rw /Volumes/HD1 /dev/disk4s1
+# HD1 rw fuse-t /Volumes/HD1 /dev/disk4s1 48213
 ```
 
-Prints label, effective state, mount point, and device.
+Prints label, effective state, driver, mount point, device, and the serving
+process id.
+
+- `driver` — `fuse-t` when `ntfsmnt` serves the volume read-write, `fskit` when
+  Apple's read-only mount is the one present, `-` when the volume is unmounted.
+- `pid` — the `ntfs-3g` process serving a read-write mount, found with
+  `pgrep -f 'ntfs-3g .*<device>( |$)'`; `-` when there is none.
 
 ### `mount`
 
@@ -156,20 +162,28 @@ uv run ntfsmnt mount HD1
 This is the command that makes a volume writable. It:
 
 1. resolves the volume and refuses if the label is ambiguous;
-2. returns success immediately if a FUSE-T mount already serves it;
-3. creates the mount point if needed;
-4. unmounts whoever holds the device — normally Apple's read-only mount;
-5. waits for the device node to reappear (10 one-second attempts);
-6. runs `ntfs-3g <device> <mount point>` with
+2. refuses a volume with no label — the label names the mount — before it
+   touches anyone's mount (see [Limitations](#limitations));
+3. returns success immediately only when a FUSE-T mount whose serving
+   `ntfs-3g` process names *this* device already exists. A mount with the same
+   label on a different disk is not this volume's mount;
+4. creates the mount point if needed;
+5. unmounts whoever holds the device or that mount point — normally Apple's
+   read-only mount, or a same-label mount served by another disk;
+6. waits for the device node to reappear (10 one-second attempts);
+7. runs `ntfs-3g <device> <mount point>` with
    `uid=<you>,gid=<your group>,umask=022,local,auto_xattr,noatime,volname=<label>`;
-7. waits up to 30 seconds for the `fuse-t:` NFS mount to appear, and evicts a
+8. waits up to 30 seconds for the `fuse-t:` NFS mount to appear, and evicts a
    competing Apple mount if it reappeared at a different mount point;
-8. writes, reads back, and deletes `.ntfsmnt-probe` inside the volume;
-9. prints `mounted HD1 at /Volumes/HD1`.
+9. writes, reads back, and deletes `.ntfsmnt-probe` inside the volume;
+10. checks with `stat` that the mount point is owned by *your* uid and gid —
+    the probe ran as root, so it cannot prove that you can write;
+11. prints `mounted HD1 at /Volumes/HD1`.
 
 If any step fails, Apple's read-only mount is restored before the command exits
 `1` with the reason. A mount that exists but cannot be written is a failure, not
-a success.
+a success. When `ntfs-3g` exits cleanly but the mount never appears, the message
+says so and names the timeout instead of reporting an `exit code 0` failure.
 
 Options:
 
@@ -196,6 +210,18 @@ It tries `diskutil unmount`, then `umount`. If the volume is busy it sends
 busy, it reports which mount point is in use and exits `1`; it never forces or
 kills with `SIGKILL`.
 
+Which mounts belong to the volume is decided by identity, not by label: a
+`fuse-t:` mount counts when the volume's own snapshot says it is read-write, or
+when the serving `ntfs-3g` process names this volume's device. A same-label
+volume on another disk is left alone.
+
+If the read-only mount cannot be put back, the unmount still happened, so the
+command says so and exits `1`:
+
+```
+ntfsmnt: unmounted HD1 (read-only restore failed; run sudo diskutil mount /dev/disk4s1)
+```
+
 `--keep-unmounted` stops after the unmount and does not restore the read-only
 mount. Use it before `eject`.
 
@@ -211,10 +237,12 @@ uv run ntfsmnt eject HD1
 
 Ejects the **parent disk** (for `/dev/disk4s1` that is `disk4`), so every volume
 on the same physical drive disappears with it. The guard is per-volume: `eject`
-refuses only when the named volume itself is still mounted, so a still-mounted
-sibling such as HD2 is ejected along with it. Re-plug the drive — or, if it is
-still attached, run `sudo diskutil mount /dev/disk4s1` and `sudo diskutil mount
-/dev/disk4s2` — to get both read-only mounts back.
+refuses only when the named volume itself is still mounted — checked against the
+live mount table and the serving `ntfs-3g` process, so a same-label mount on
+another disk does not count — so a still-mounted sibling such as HD2 is ejected
+along with it. Re-plug the drive — or, if it is still attached, run
+`sudo diskutil mount /dev/disk4s1` and `sudo diskutil mount /dev/disk4s2` — to
+get both read-only mounts back.
 
 ## JSON output
 
@@ -236,7 +264,24 @@ diagnostics stay on stderr.
 ]
 ```
 
-`status` — one object of the same shape.
+`status` — one object with the same six keys plus `driver` and `pid`:
+
+```json
+{
+  "device": "/dev/disk4s1",
+  "label": "HD1",
+  "uuid": "E69303DC-BC97-42BA-B95E-98D777D099DC",
+  "size": 1000296415232,
+  "state": "rw",
+  "mount_point": "/Volumes/HD1",
+  "driver": "fuse-t",
+  "pid": 48213
+}
+```
+
+`driver` is `"fuse-t"` when `ntfsmnt` serves the volume read-write, `"fskit"`
+when Apple's read-only mount is present, and `"-"` when the volume is
+unmounted. `pid` is the serving `ntfs-3g` process, or `null`.
 
 `doctor` — array of checks:
 
@@ -256,7 +301,12 @@ diagnostics stay on stderr.
 `pid` is `null` when the volume was already mounted by FUSE-T and no new process
 was started, or when `pgrep` finds nothing.
 
-`unmount` and `eject` — `{"ok": true}`.
+`unmount` — `{"ok": true, "restored": true}`. `restored` is `false` when the
+teardown happened but Apple's read-only mount could not be put back; the exit
+code is then `1`, exactly as in the text output. `eject` — `{"ok": true}`.
+
+The `--remove-hiberfile` confirmation prompt is written to stderr, so stdout is
+a single JSON value even when you are being prompted.
 
 `state` is one of `"rw"`, `"ro"`, `"unmounted"`. `mount_point` is `null` when
 the volume is unmounted. `fix` is `null` when no fix is needed.
@@ -318,7 +368,10 @@ What the tool will not do:
 - **Never** guesses between volumes with the same label; it lists candidates and
   stops.
 - **Never** leaves a failed mount half-applied: it restores Apple's read-only
-  mount before exiting non-zero. Restoration is attempted, not re-verified.
+  mount before exiting non-zero, including when the run is interrupted. The
+  message says the mount was restored only when the mount table can be re-read
+  and shows it; otherwise it says the restore was attempted.
+- **Never** mounts a volume that has no label: relabel it first.
 - **Never** mounts read-write without proving the mount is writable.
 - **Never** writes to a hibernated or dirty volume automatically. Without the
   opt-in flag, the attempt fails and the read-only mount is restored.
@@ -408,6 +461,9 @@ If it is missing, `sudo diskutil mount /dev/disk4s1` restores it. Do not run
   mutate the filesystem as described above.
 - **Performance** over the NFS indirection has not been benchmarked; USB speed
   is expected to dominate.
+- **Unlabeled volumes are refused.** The label names the FUSE-T mount source
+  and the default mount point, and two unlabeled volumes cannot be told apart.
+  Relabel the volume, then mount it.
 - **One volume at a time in practice.** Mounting HD2 read-write while HD1 is
   read-write is supported by the code paths but was not part of the verified
   acceptance run.
@@ -421,10 +477,10 @@ uv sync
 uv run pytest -q
 ```
 
-The suite has 92 tests and never touches hardware. Subprocess effects
+The suite has 125 tests and never touches hardware. Subprocess effects
 (`diskutil`, `ntfs-3g`, `mount`, `pgrep`, `kill`, `sleep`) are injected as
-callables, and the mount-point creation and write probe are monkeypatched in
-tests that exercise the orchestration.
+callables, and the mount-point creation, write probe, and ownership `stat` are
+monkeypatched in tests that exercise the orchestration.
 
 Manual acceptance on real hardware is documented in
 [`tests/manual/acceptance.md`](tests/manual/acceptance.md). It covers HD1 only

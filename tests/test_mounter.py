@@ -280,13 +280,23 @@ class FakeEnv:
 def volname(argv):
     options = argv[argv.index("-o") + 1]
     return next(
-        part.split("=", 1)[1] for part in options.split(",") if part.startswith("volname=")
+        part.split("=", 1)[1]
+        for part in options.split(",")
+        if part.startswith("volname=")
     )
+
+
+class Owned:
+    """Stand-in for `os.stat_result`'s ownership fields."""
+
+    def __init__(self, uid=501, gid=20):
+        self.st_uid = uid
+        self.st_gid = gid
 
 
 @pytest.fixture(autouse=True)
 def mount_point_dirs(monkeypatch):
-    """Keep host writes out of the tests: no mkdir, and no real write probe."""
+    """Keep host writes out of the tests: no mkdir, no real probe, no real stat."""
     created: list[str] = []
     monkeypatch.setattr(mounter, "_ensure_mount_point", created.append)
 
@@ -295,9 +305,10 @@ def mount_point_dirs(monkeypatch):
         # `except Exception` guard and fails the test loudly.
         pytest.fail(f"test used the real write probe on {mount_point}")
 
-    # `mount_volume` resolves this through the module attribute; the tests that
+    # `mount_volume` resolves these through module attributes; the tests that
     # exercise the real probe call the directly imported function instead.
     monkeypatch.setattr(mounter, "_write_probe", unexpected_real_probe)
+    monkeypatch.setattr(mounter, "_default_stat", lambda path: Owned())
     return created
 
 
@@ -460,6 +471,41 @@ def test_successful_ntfs3g_without_a_mount_names_the_timeout(fake_env):
     message = str(err.value)
     assert "did not appear within 2 seconds" in message
     assert "exit code 0" not in message
+
+
+def test_mount_owned_by_another_user_fails_and_restores(fake_env, monkeypatch):
+    # The write probe ran as root; the invoking user must still own the mount.
+    monkeypatch.setattr(mounter, "_default_stat", lambda path: Owned(uid=0, gid=0))
+
+    with pytest.raises(MountFailed) as err:
+        fake_env.mount(state="ro")
+
+    message = str(err.value)
+    assert fake_env.write_probe_called
+    assert "owned by uid 0" in message
+    assert "expected uid 501" in message
+    assert fake_env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
+    assert fake_env.state("HD1") == "ro"
+
+
+def test_unlabeled_volume_is_refused_before_touching_the_stack(fake_env):
+    unlabeled = Device(
+        identifier="disk7s1",
+        device="/dev/disk7s1",
+        label="",
+        uuid="UUID-UNLABELED",
+        size=1,
+        fs_type="Windows_NTFS",
+        mount_point=None,
+    )
+
+    with pytest.raises(MountFailed) as err:
+        fake_env.mount(device=unlabeled, state="ro")
+
+    message = str(err.value)
+    assert "no label" in message
+    assert "relabel" in message
+    assert fake_env.calls == []
 
 
 def test_unexpected_probe_error_restores_read_only(fake_env):
