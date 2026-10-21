@@ -37,6 +37,24 @@ def test_eperm_mentions_full_disk_access():
     assert "Full Disk Access" in dev.fix
 
 
+def test_permission_denied_as_user_suggests_sudo():
+    probe = "Error opening read-only '/dev/disk4s1': Permission denied"
+    checks = run_checks(make_env(euid=501, run=lambda argv: (19, probe)))
+    dev = next(c for c in checks if c.name == "device-access")
+    assert not dev.ok
+    assert "sudo" in (dev.fix or "")
+    assert "Permission denied" not in (dev.fix or "")
+    assert "Permission denied" in dev.detail
+
+
+def test_generic_probe_failure_has_no_fix():
+    checks = run_checks(make_env(run=lambda argv: (5, "\nError: something odd happened\n")))
+    dev = next(c for c in checks if c.name == "device-access")
+    assert not dev.ok
+    assert dev.fix is None
+    assert "Error: something odd happened" in dev.detail
+
+
 def test_no_first_device_skips_device_access():
     checks = run_checks(make_env(first_device=lambda: None))
     dev = next(c for c in checks if c.name == "device-access")

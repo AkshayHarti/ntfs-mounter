@@ -71,9 +71,17 @@ def _check_root(env: Env) -> Check:
     )
 
 
-def _probe_fix(env: Env, stderr: str) -> str:
+PERMISSION_MARKERS = (
+    "permission denied",
+    "eacces",
+    "operation not permitted",
+    "eperm",
+)
+
+
+def _probe_guidance(env: Env, stderr: str) -> str | None:
     lowered = stderr.lower()
-    if "operation not permitted" in lowered:
+    if any(marker in lowered for marker in PERMISSION_MARKERS):
         if env.euid == 0:
             return (
                 "Grant Full Disk Access to your terminal in System Settings > "
@@ -82,10 +90,15 @@ def _probe_fix(env: Env, stderr: str) -> str:
         return "Run as root via sudo from a terminal that has Full Disk Access"
     if "busy" in lowered:
         return "The volume is mounted; unmount it first, then retry"
+    return None
+
+
+def _probe_detail(device: str, rc: int, stderr: str) -> str:
+    detail = f"ntfs-3g.probe failed on {device} with exit code {rc}"
     for line in stderr.splitlines():
         if line.strip():
-            return line.strip()
-    return "ntfs-3g.probe failed without output"
+            return f"{detail}: {line.strip()}"
+    return detail
 
 
 def _check_device_access(env: Env) -> Check:
@@ -99,8 +112,8 @@ def _check_device_access(env: Env) -> Check:
     rc, stderr = env.run([NTFS_3G_PROBE, "--readwrite", device])
     if rc == 0:
         return Check("device-access", True, f"{device} is readable/writable")
-    detail = f"ntfs-3g.probe failed on {device} with exit code {rc}"
-    return Check("device-access", False, detail, _probe_fix(env, stderr))
+    detail = _probe_detail(device, rc, stderr)
+    return Check("device-access", False, detail, _probe_guidance(env, stderr))
 
 
 def _check_licence() -> Check:
