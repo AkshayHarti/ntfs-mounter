@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from ntfsmnt.identity import is_ours, parse_pid, pid_pattern
+from ntfsmnt.identity import is_ours, owner, parse_pid, pid_pattern
 from ntfsmnt.mounttable import MountEntry
 
 DEVICE = "/dev/disk4s1"
@@ -68,3 +68,38 @@ def test_is_ours_does_not_ask_about_apple_or_other_mounts():
 
     assert is_ours(APPLE, device=DEVICE, run=run) is False
     assert run.calls == []
+
+
+def owner_for(results, *, label_shared=False, entry=OURS):
+    return owner(
+        entry,
+        device=DEVICE,
+        label="HD1",
+        run=FakeRun(*results),
+        label_shared=label_shared,
+    )
+
+
+def test_owner_is_ours_when_the_process_names_the_device():
+    assert owner_for([(0, "4242\n")], label_shared=True) == "ours"
+
+
+def test_owner_treats_a_unique_label_as_ownership_when_pgrep_finds_nothing():
+    # One volume carries HD1: no other disk can own fuse-t:/HD1.
+    assert owner_for([(1, "")]) == "ours"
+
+
+def test_owner_trusts_pgrep_when_the_label_is_shared():
+    assert owner_for([(1, "")], label_shared=True) == "other"
+
+
+@pytest.mark.parametrize("label_shared", [False, True])
+def test_owner_is_unknown_when_pgrep_cannot_run(label_shared):
+    assert (
+        owner_for([(127, "pgrep: command not found")], label_shared=label_shared)
+        == "unknown"
+    )
+
+
+def test_owner_is_other_for_apple_mounts():
+    assert owner_for([], entry=APPLE) == "other"

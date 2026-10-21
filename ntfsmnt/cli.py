@@ -224,10 +224,22 @@ def _cmd_doctor(args: argparse.Namespace, collector: Callable[[], list[Volume]])
     return 1 if hard_failures(checks) else 0
 
 
+def _label_shared(volume: Volume, volumes: Sequence[Volume]) -> bool:
+    """Does another NTFS volume in the snapshot carry this volume's label?
+
+    A label is only ambiguous when it is shared. When it is unique, a
+    ``fuse-t:/<label>`` entry belongs to this volume even if ``pgrep`` cannot
+    answer; when it is shared, only the serving process can decide.
+    """
+    return sum(1 for v in volumes if v.device.label == volume.device.label) > 1
+
+
 def _cmd_mount(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
-    volume = _lookup(args.label, collector())
+    volumes = collector()
+    volume = _lookup(args.label, volumes)
     if volume is None:
         return 1
+    label_shared = _label_shared(volume, volumes)
     label = volume.device.label
     # The sudo re-exec keeps only this argv, so every flag must be forwarded.
     flags = ["--recover"] if args.recover else []
@@ -256,6 +268,7 @@ def _cmd_mount(args: argparse.Namespace, collector: Callable[[], list[Volume]]) 
             sleep=time.sleep,
             recover=args.recover,
             remove_hiberfile=args.remove_hiberfile,
+            label_shared=label_shared,
         )
     except MountFailed as exc:
         print(f"ntfsmnt: {exc}", file=sys.stderr)
@@ -270,9 +283,11 @@ def _cmd_mount(args: argparse.Namespace, collector: Callable[[], list[Volume]]) 
 def _cmd_unmount(
     args: argparse.Namespace, collector: Callable[[], list[Volume]]
 ) -> int:
-    volume = _lookup(args.label, collector())
+    volumes = collector()
+    volume = _lookup(args.label, volumes)
     if volume is None:
         return 1
+    label_shared = _label_shared(volume, volumes)
     flags = ["--keep-unmounted"] if args.keep_unmounted else []
     if args.json:
         flags.append("--json")
@@ -284,6 +299,7 @@ def _cmd_unmount(
             mounts=read_mount_table,
             sleep=time.sleep,
             keep_unmounted=args.keep_unmounted,
+            label_shared=label_shared,
         )
     except UnmountFailed as exc:
         print(f"ntfsmnt: {exc}", file=sys.stderr)
@@ -302,12 +318,16 @@ def _cmd_unmount(
 
 
 def _cmd_eject(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
-    volume = _lookup(args.label, collector())
+    volumes = collector()
+    volume = _lookup(args.label, volumes)
     if volume is None:
         return 1
+    label_shared = _label_shared(volume, volumes)
     # The snapshot can be stale and a label is not an identity: ask the live
     # table and the serving processes before paying for a privilege prompt.
-    if has_mount(volume, run=real_run, mounts=read_mount_table):
+    if has_mount(
+        volume, run=real_run, mounts=read_mount_table, label_shared=label_shared
+    ):
         print(
             f"ntfsmnt: {volume.device.label} is still mounted. "
             "Unmount it first, then eject.",
@@ -322,6 +342,7 @@ def _cmd_eject(args: argparse.Namespace, collector: Callable[[], list[Volume]]) 
             run=real_run,
             mounts=read_mount_table,
             sleep=time.sleep,
+            label_shared=label_shared,
         )
     except UnmountFailed as exc:
         print(f"ntfsmnt: {exc}", file=sys.stderr)

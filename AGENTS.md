@@ -13,7 +13,7 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 ## Commands
 
 - Install deps: `uv sync`
-- Test: `uv run pytest -q` (125 tests)
+- Test: `uv run pytest -q` (139 tests)
 - Manual acceptance: `tests/manual/acceptance.md` (real hardware, root, Full
   Disk Access terminal)
 - Build/run: `uv run ntfsmnt ...`
@@ -48,8 +48,9 @@ tests/
 
 - `diskutil.py` / `mounttable.py` — parse live system state.
 - `volumes.py` — combine devices and mounts; determine `rw`/`ro`/`unmounted`.
-- `identity.py` — decide whether a `fuse-t:` entry is *this* device's mount by
-  asking the `ntfs-3g` process whose argv names the device.
+- `identity.py` — decide whether a `fuse-t:` entry is *this* device's mount:
+  a unique label settles it and `pgrep` corroborates; with a shared label the
+  `ntfs-3g` process whose argv names the device must decide.
 - `options.py` — build ntfs-3g options, classify failures (hibernated, dirty,
   busy, EPERM).
 - `doctor.py` — check the host; hard failures are `fuse-t`, `ntfs-3g`, `root`,
@@ -83,7 +84,9 @@ These are hard requirements. Do not weaken them in any change.
    unconditionally and restores last; it may claim "restored" only when the
    mount table confirms it.
 6. **No guesses on duplicate labels.** `resolve()` raises `AmbiguousVolume` and
-   the CLI lists candidates; never pick the first match.
+   the CLI lists candidates; never pick the first match. A shared label is
+   resolved by the serving process; a `fuse-t:` mount is never evicted to make
+   room, and an unanswerable `pgrep` refuses rather than guesses.
 7. **No write without a probe.** `mounter.py` writes, reads back, and deletes
    `.ntfsmnt-probe`, then checks the mount point is owned by the invoking uid
    and gid, before reporting success.

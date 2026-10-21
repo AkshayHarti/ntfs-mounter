@@ -27,6 +27,17 @@ OTHER = Device(
     fs_type="Windows_NTFS",
     mount_point=None,
 )
+# A second disk carrying OTHER's label: the case where a label stops being an
+# identity. It is the one that may already hold /Volumes/DATA read-write.
+DATA_DISK = Device(
+    identifier="disk4s1",
+    device="/dev/disk4s1",
+    label="DATA",
+    uuid="UUID-DATA-A",
+    size=1,
+    fs_type="Windows_NTFS",
+    mount_point=None,
+)
 MOUNT_POINT = "/Volumes/HD1"
 OTHER_MOUNT_POINT = "/Volumes/DATA"
 NTFS3G = "/usr/local/bin/ntfs-3g"
@@ -212,6 +223,7 @@ class FakeEnv:
         recover=False,
         remove_hiberfile=False,
         timeout=30,
+        label_shared=False,
         **configure_options,
     ):
         point = mount_point or self.points.get(device.device, self.mount_point)
@@ -225,10 +237,11 @@ class FakeEnv:
             recover=recover,
             remove_hiberfile=remove_hiberfile,
             timeout=timeout,
+            label_shared=label_shared,
         )
 
     def invoke(self, device=DEVICE, mount_point=None, *, recover=False,
-               remove_hiberfile=False, timeout=30):
+               remove_hiberfile=False, timeout=30, label_shared=False):
         point = mount_point or self.points.get(device.device, self.mount_point)
         return mount_volume(
             Volume(
@@ -244,6 +257,7 @@ class FakeEnv:
             probe=self.probe,
             recover=recover,
             remove_hiberfile=remove_hiberfile,
+            label_shared=label_shared,
         )
 
     # --- helpers ------------------------------------------------------------
@@ -326,21 +340,44 @@ def test_idempotent_when_already_rw(fake_env):
     assert not [c for c in fake_env.calls if c[:2] == ["diskutil", "unmount"]]
 
 
-def test_same_label_mount_served_by_another_device_is_not_idempotent(fake_env):
-    # Drive A (disk4s1, label DATA) is read-write at /Volumes/DATA. Mounting
-    # drive B (disk6s1, also labelled DATA) must not look like our own mount
-    # just because the label and mount point match.
+def test_same_label_live_mount_at_the_target_is_refused_not_evicted(
+    fake_env, mount_point_dirs
+):
+    # Drive A (disk4s1, label DATA) is read-write at /Volumes/DATA. Drive B
+    # (disk6s1, same label) must not evict A to make room for itself.
+    live = MountEntry("fuse-t:/DATA", OTHER_MOUNT_POINT, "nfs", False)
+    fake_env.points[DATA_DISK.device] = OTHER_MOUNT_POINT
     fake_env.points[OTHER.device] = OTHER_MOUNT_POINT
-    fake_env.procs = [[NTFS3G, DEVICE.device, OTHER_MOUNT_POINT, "-o", "volname=DATA"]]
-    fake_env.table = [MountEntry("fuse-t:/DATA", OTHER_MOUNT_POINT, "nfs", False)]
+    fake_env.table = [live]
+    fake_env.procs = [[NTFS3G, DATA_DISK.device, OTHER_MOUNT_POINT, "-o", "volname=DATA"]]
     fake_env.configure()
 
-    result = fake_env.invoke(OTHER, OTHER_MOUNT_POINT)
+    with pytest.raises(MountFailed) as err:
+        fake_env.invoke(OTHER, OTHER_MOUNT_POINT, label_shared=True)
 
-    mounted = [call for call in fake_env.calls if call[0] == NTFS3G]
-    assert [call[1] for call in mounted] == [OTHER.device]
+    message = str(err.value)
+    assert OTHER_MOUNT_POINT in message
+    assert "'DATA'" in message
+    assert OTHER.device in message
+    assert "unmount it before mounting this one" in message
+    assert mount_point_dirs == []
+    assert not [c for c in fake_env.calls if c[:2] == ["diskutil", "unmount"]]
+    assert fake_env.ntfs3g_invocations() == 0
+    assert fake_env.table == [live]
+
+
+def test_same_label_mount_served_by_this_device_is_idempotent(fake_env):
+    fake_env.points[DATA_DISK.device] = OTHER_MOUNT_POINT
+    fake_env.table = [MountEntry("fuse-t:/DATA", OTHER_MOUNT_POINT, "nfs", False)]
+    fake_env.procs = [[NTFS3G, DATA_DISK.device, OTHER_MOUNT_POINT, "-o", "volname=DATA"]]
+    fake_env.configure()
+
+    result = fake_env.invoke(DATA_DISK, OTHER_MOUNT_POINT, label_shared=True)
+
     assert result.mount_point == OTHER_MOUNT_POINT
-    assert result.pid == 4242
+    assert result.pid is None
+    assert fake_env.ntfs3g_invocations() == 0
+    assert not [c for c in fake_env.calls if c[0] == "diskutil"]
 
 
 def test_pgrep_uses_the_precise_device_pattern(fake_env):

@@ -10,7 +10,7 @@ from ntfsmnt.unmounter import (
     has_mount,
     unmount_volume,
 )
-from ntfsmnt.volumes import Volume
+from ntfsmnt.volumes import Volume, build_volumes
 
 DEVICE = Device(
     identifier="disk4s1",
@@ -266,21 +266,101 @@ def test_live_mount_is_found_when_pgrep_confirms_the_device(source):
     assert env.state() == "unmounted"
 
 
-def test_unmount_of_another_volume_with_the_same_label_leaves_drive_a_alone():
+def test_unmount_of_another_volume_with_the_same_label_refuses_and_leaves_a_alone():
     # Drive A (disk4s1) is read-write at /Volumes/HD1. Drive B (disk6s1,
-    # unmounted) shares the label. Unmounting B must not touch A's mount.
-    drive_a = MountEntry(
-        source="fuse-t:/HD1", mount_point=MOUNT_POINT, fs="nfs", read_only=False
-    )
-    env = FakeEnv([drive_a])
-    volume = Volume(device=OTHER, mounts=())
+    # unmounted) shares the label, so `build_volumes` attributes A's mount to
+    # B as well. Unmounting B must neither tear down A's mount nor guess.
+    env = FakeEnv([OURS])
+    volumes = build_volumes([DEVICE, OTHER], env.mounts())
+    drive_b = next(v for v in volumes if v.device is OTHER)
 
-    assert (
-        unmount_volume(volume, run=env.run, mounts=env.mounts, sleep=env.sleep) is True
-    )
+    assert drive_b.state == "rw"
+    assert drive_b.mount_point == MOUNT_POINT
 
+    with pytest.raises(UnmountFailed) as excinfo:
+        unmount_volume(
+            drive_b,
+            run=env.run,
+            mounts=env.mounts,
+            sleep=env.sleep,
+            label_shared=True,
+        )
+
+    message = str(excinfo.value)
+    assert MOUNT_POINT in message
+    assert "another volume" in message
+    assert "same label" in message
+    assert "manually" in message
     assert not [call for call in env.calls if call[0] in ("diskutil", "umount", "kill")]
-    assert env.entries == [drive_a]
+    assert env.entries == [OURS]
+
+
+def test_unmount_of_the_serving_volume_unpacks_its_own_mount():
+    env = FakeEnv([OURS])
+    volumes = build_volumes([DEVICE, OTHER], env.mounts())
+    drive_a = next(v for v in volumes if v.device is DEVICE)
+
+    restored = unmount_volume(
+        drive_a,
+        run=env.run,
+        mounts=env.mounts,
+        sleep=env.sleep,
+        label_shared=True,
+    )
+
+    assert restored is True
+    assert ["pgrep", "-f", "ntfs-3g .*/dev/disk4s1( |$)"] in env.calls
+    assert ["diskutil", "unmount", MOUNT_POINT] in env.calls
+    assert env.state() == "ro"
+
+
+def test_unmount_with_a_unique_label_proceeds_when_pgrep_cannot_answer():
+    # One volume carries the label: the entry can only be its mount, so a
+    # missing pgrep is a stale process table, not another disk.
+    env = FakeEnv([OURS])
+    env.pgrep_returns(127, "pgrep: command not found")
+    volume = build_volumes([DEVICE], env.mounts())[0]
+
+    restored = unmount_volume(volume, run=env.run, mounts=env.mounts, sleep=env.sleep)
+
+    assert restored is True
+    assert ["diskutil", "unmount", MOUNT_POINT] in env.calls
+    assert env.state() == "ro"
+
+
+def test_unmount_with_a_shared_label_refuses_when_pgrep_cannot_answer():
+    env = FakeEnv([OURS])
+    env.pgrep_returns(127, "pgrep: command not found")
+    volumes = build_volumes([DEVICE, OTHER], env.mounts())
+    drive_a = next(v for v in volumes if v.device is DEVICE)
+
+    with pytest.raises(UnmountFailed) as excinfo:
+        unmount_volume(
+            drive_a,
+            run=env.run,
+            mounts=env.mounts,
+            sleep=env.sleep,
+            label_shared=True,
+        )
+
+    assert "manually" in str(excinfo.value)
+    assert not [call for call in env.calls if call[0] in ("diskutil", "umount", "kill")]
+    assert env.entries == [OURS]
+
+
+def test_busy_unmount_skips_the_restore_while_our_mount_is_still_live():
+    # `diskutil mount` under a live read-write mount is refused or lands at
+    # "/Volumes/HD1 1"; neither may happen.
+    env = FakeEnv([OURS])
+    env.unmount_returns(1, "Resource busy")
+    env.umount_returns((1, "Resource busy"), (1, "Resource busy"))
+
+    with pytest.raises(UnmountFailed):
+        unmount_volume(env.volume(), run=env.run, mounts=env.mounts, sleep=env.sleep)
+
+    assert env.entries == [OURS]
+    assert not [call for call in env.calls if call[:2] == ["diskutil", "mount"]]
+    assert not any(e.mount_point == f"{MOUNT_POINT} 1" for e in env.entries)
 
 
 def test_unmount_refuses_busy_and_names_mount():
@@ -378,12 +458,16 @@ def test_unmount_reports_first_stderr_line_for_other_failures():
 
 
 def test_has_mount_is_false_for_a_same_label_entry_served_by_another_disk():
-    stale = MountEntry(
-        source="fuse-t:/HD1", mount_point=MOUNT_POINT, fs="nfs", read_only=False
+    env = FakeEnv([OURS])
+    volumes = build_volumes([DEVICE, OTHER], env.mounts())
+    drive_b = next(v for v in volumes if v.device is OTHER)
+
+    assert (
+        has_mount(
+            drive_b, run=env.run, mounts=env.mounts, label_shared=True
+        )
+        is False
     )
-    env = FakeEnv([stale])
-    volume = Volume(device=OTHER, mounts=())
-    assert has_mount(volume, run=env.run, mounts=env.mounts) is False
 
 
 def test_has_mount_is_true_when_the_serving_process_names_the_device():
@@ -418,15 +502,29 @@ def test_eject_refuses_while_mounted():
 
 
 def test_eject_ignores_a_same_label_mount_served_by_another_disk():
-    stale = MountEntry(
-        source="fuse-t:/HD1", mount_point=MOUNT_POINT, fs="nfs", read_only=False
-    )
-    env = FakeEnv([stale])
-    volume = Volume(device=OTHER, mounts=())
+    env = FakeEnv([OURS])
+    volumes = build_volumes([DEVICE, OTHER], env.mounts())
+    drive_b = next(v for v in volumes if v.device is OTHER)
 
-    eject_volume(volume, run=env.run, mounts=env.mounts, sleep=env.sleep)
+    eject_volume(
+        drive_b, run=env.run, mounts=env.mounts, sleep=env.sleep, label_shared=True
+    )
 
     assert ["diskutil", "eject", "disk6"] in env.calls
+
+
+def test_eject_refuses_when_a_shared_label_cannot_be_resolved():
+    env = FakeEnv([OURS])
+    env.pgrep_returns(127, "pgrep: command not found")
+    volumes = build_volumes([DEVICE, OTHER], env.mounts())
+    drive_b = next(v for v in volumes if v.device is OTHER)
+
+    with pytest.raises(UnmountFailed):
+        eject_volume(
+            drive_b, run=env.run, mounts=env.mounts, sleep=env.sleep, label_shared=True
+        )
+
+    assert not any(call[:2] == ["diskutil", "eject"] for call in env.calls)
 
 
 def test_eject_when_unmounted_uses_parent_disk_once():

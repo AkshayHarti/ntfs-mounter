@@ -261,7 +261,7 @@ task report; screenshots are not needed.
 
 ## What unit tests do not cover, and why
 
-The 92 unit tests inject `run`, `mounts`, `sleep`, and `probe`, so they verify
+The 139 unit tests inject `run`, `mounts`, `sleep`, and `probe`, so they verify
 command sequences and messages but never touch a device. These paths are
 therefore only exercised by hand, and this run does not exercise them:
 
@@ -276,7 +276,8 @@ therefore only exercised by hand, and this run does not exercise them:
 - **Duplicate labels.** Needs two attached NTFS volumes with the same label.
   The attached volumes (HD1, HD2, and the three on disk5) all have distinct
   labels, so ambiguity cannot be produced without renaming a real volume. Unit
-  tests cover the resolver's ambiguity error with synthetic volumes.
+  tests cover the resolver's ambiguity error and the mount/unmount/eject
+  refusals with synthetic volumes and a synthetic process table.
 - **Full Disk Access failure.** Needs a terminal *without* FDA. Revoking and
   re-granting TCC mid-run is disruptive, and the unprivileged `doctor` in Step
   2 already demonstrates the permission-denied path (`EPERM` on the device).

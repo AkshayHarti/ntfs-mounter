@@ -10,7 +10,7 @@ from ntfsmnt.doctor import Check
 from ntfsmnt.models import Device
 from ntfsmnt.mounter import MountResult
 from ntfsmnt.mounttable import MountEntry
-from ntfsmnt.volumes import Volume
+from ntfsmnt.volumes import Volume, build_volumes
 
 OURS_RW = MountEntry(source="fuse-t:/HD1", mount_point="/Volumes/HD1", fs="nfs", read_only=False)
 
@@ -418,16 +418,23 @@ def test_eject_refuses_mounted_volume_before_privilege(monkeypatch, capsys):
     assert root_calls == []
 
 
-def test_eject_ignores_a_stale_same_label_mount(monkeypatch, capsys):
-    # The volume itself is unmounted; the only fuse-t:/HD1 entry in the table
-    # is served by another disk. It must not refuse this eject.
-    disposed = MountEntry(
+def test_eject_ignores_a_same_label_mount_served_by_another_disk(monkeypatch, capsys):
+    # Two volumes carry HD1; the only fuse-t:/HD1 entry is served by the other
+    # one (disk6s1). Ejecting disk4s1 must not refuse on that entry.
+    live = MountEntry(
         source="fuse-t:/HD1", mount_point="/Volumes/HD1", fs="nfs", read_only=False
+    )
+    volumes = build_volumes(
+        [
+            make_device(),
+            make_device("disk6s1", node="/dev/disk6s1", uuid="UUID-6"),
+        ],
+        [live],
     )
     stub_host(
         monkeypatch,
-        table=[disposed],
-        serving=[["/usr/local/bin/ntfs-3g", "/dev/disk9s1", "/Volumes/HD1", "-o", ""]],
+        table=[live],
+        serving=[["/usr/local/bin/ntfs-3g", "/dev/disk6s1", "/Volumes/HD1", "-o", ""]],
     )
     root_calls = []
     ejected = []
@@ -436,13 +443,61 @@ def test_eject_ignores_a_stale_same_label_mount(monkeypatch, capsys):
         ntfsmnt.cli, "eject_volume", lambda volume, **kwargs: ejected.append(volume)
     )
 
-    rc = main(["eject", "HD1"], collector=fake_volumes)
+    rc = main(["eject", "/dev/disk4s1"], collector=lambda: volumes)
 
     out = capsys.readouterr().out
     assert rc == 0
     assert out.strip() == "ejected HD1"
     assert root_calls == [["eject", "/dev/disk4s1"]]
     assert ejected
+
+
+def test_mount_passes_the_shared_label_fact(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+
+    def fake_mount(volume, **kwargs):
+        captured.update(kwargs)
+        return MountResult(volume=volume, mount_point="/Volumes/HD1", pid=None)
+
+    monkeypatch.setattr(ntfsmnt.cli, "mount_volume", fake_mount)
+    volumes = [
+        make_volume(make_device()),
+        make_volume(make_device("disk6s1", node="/dev/disk6s1", uuid="UUID-6")),
+    ]
+
+    assert main(["mount", "/dev/disk4s1"], collector=lambda: volumes) == 0
+    assert captured["label_shared"] is True
+
+    captured.clear()
+    assert main(["mount", "/dev/disk4s1"], collector=fake_volumes) == 0
+    assert captured["label_shared"] is False
+
+
+def test_unmount_and_eject_pass_the_shared_label_fact(monkeypatch, capsys):
+    unmounted = {}
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+
+    def fake_unmount(volume, **kwargs):
+        unmounted.update(kwargs)
+        return True
+
+    monkeypatch.setattr(ntfsmnt.cli, "unmount_volume", fake_unmount)
+    volumes = [
+        make_volume(make_device()),
+        make_volume(make_device("disk6s1", node="/dev/disk6s1", uuid="UUID-6")),
+    ]
+    assert main(["unmount", "/dev/disk4s1"], collector=lambda: volumes) == 0
+    assert unmounted["label_shared"] is True
+    capsys.readouterr()
+
+    stub_host(monkeypatch)
+    ejected = {}
+    monkeypatch.setattr(
+        ntfsmnt.cli, "eject_volume", lambda volume, **kwargs: ejected.update(kwargs)
+    )
+    assert main(["eject", "/dev/disk4s1"], collector=lambda: volumes) == 0
+    assert ejected["label_shared"] is True
 
 
 def test_eject_guard_reads_the_live_table_not_the_snapshot(monkeypatch, capsys):

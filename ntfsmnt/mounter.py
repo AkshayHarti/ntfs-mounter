@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
-from ntfsmnt.identity import is_ours, parse_pid, pid_pattern
+from ntfsmnt.identity import Ownership, is_fuse_t, owner, parse_pid, pid_pattern
 from ntfsmnt.models import Device
 from ntfsmnt.mounttable import MountEntry
 from ntfsmnt.options import build_mount_args, classify_mount_failure
@@ -36,23 +36,35 @@ class MountFailed(Exception):
     """The volume could not be mounted read-write. The message is user-facing."""
 
 
-def _is_ours(entry: MountEntry) -> bool:
-    return entry.fs == "nfs" and entry.source.startswith("fuse-t:")
+def _ownership(
+    entries: list[MountEntry],
+    device: Device,
+    *,
+    run: Callable[[list[str]], tuple[int, str]],
+    label_shared: bool,
+) -> list[tuple[MountEntry, Ownership]]:
+    """Pair every entry with what it says about this volume.
 
-
-def _serves_device(entry: MountEntry, device: Device, mount_point: str) -> bool:
-    """Would this entry be a candidate for the device or the mount point?
-
-    A label match is only a candidate: the mount table cannot say which disk a
-    ``fuse-t:/<label>`` mount belongs to, so identity is decided by ``is_ours``.
+    Every ``pgrep`` happens here, once, before anything is unmounted: the
+    answers decide idempotency and whether a FUSE-T mount blocks the target.
     """
-    if entry.source == device.device or entry.mount_point == mount_point:
-        return True
-    return bool(device.label) and entry.source == f"fuse-t:/{device.label}"
+    return [
+        (
+            entry,
+            owner(
+                entry,
+                device=device.device,
+                label=device.label,
+                run=run,
+                label_shared=label_shared,
+            ),
+        )
+        for entry in entries
+    ]
 
 
 def _has_our_mount(entries: list[MountEntry], mount_point: str) -> bool:
-    return any(_is_ours(e) and e.mount_point == mount_point for e in entries)
+    return any(is_fuse_t(e) and e.mount_point == mount_point for e in entries)
 
 
 def _safe_mounts(mounts: Callable[[], list[MountEntry]]) -> list[MountEntry]:
@@ -183,6 +195,7 @@ def mount_volume(
     timeout: int = 30,
     recover: bool = False,
     remove_hiberfile: bool = False,
+    label_shared: bool = False,
     probe: Callable[[str], None] | None = None,
     stat: Callable[[str], os.stat_result] | None = None,
 ) -> MountResult:
@@ -194,13 +207,25 @@ def mount_volume(
             f"{device.device}: volume has no label; relabel it before mounting"
         )
     mount_point = volume.mount_point or f"/Volumes/{device.label}"
+    verdicts = _ownership(mounts(), device, run=run, label_shared=label_shared)
 
-    # 1. Already served by us: succeed without touching the stack. The mount
-    # table cannot tell two same-label volumes apart, so only a mount whose
-    # process names *this* device counts. A same-label mount on another disk is
-    # a competitor at this mount point and is evicted below.
-    if any(is_ours(e, device=device.device, run=run) for e in mounts()):
-        return MountResult(volume=volume, mount_point=mount_point, pid=None)
+    # 1. Already served by us: succeed without touching the stack. With a
+    # unique label the entry is this volume's even when pgrep cannot answer;
+    # with a shared label only a mount whose process names *this* device
+    # counts, and an unanswerable pgrep is a refusal, not a success.
+    for _entry, verdict in verdicts:
+        if verdict == "ours" or (verdict == "unknown" and not label_shared):
+            return MountResult(volume=volume, mount_point=mount_point, pid=None)
+
+    # 2. A FUSE-T mount at the target belongs to a volume, never to this one:
+    # refuse before creating the mount point or evicting anything, so a
+    # same-label drive keeps its mount.
+    if any(is_fuse_t(e) and e.mount_point == mount_point for e, _ in verdicts):
+        raise MountFailed(
+            f"mount point {mount_point} is already a read-write mount; its "
+            f"volume shares the label '{device.label}' with {device.device} — "
+            f"unmount it before mounting this one"
+        )
 
     try:
         _ensure_mount_point(mount_point)
@@ -209,18 +234,21 @@ def mount_volume(
             f"Could not create mount point {mount_point}: {exc.strerror or exc}"
         ) from exc
 
-    # 2. Evict whoever holds the device (Apple's read-only mount, usually) or
-    # the mount point (a same-label volume served by another disk). From the
-    # first eviction on, every exit must restore Apple's mount — including an
-    # interrupt, so the whole sequence is guarded by BaseException below.
+    # 3. Evict Apple's read-only mount of this device, or Apple's mount at the
+    # mount point. From the first eviction on, every exit must restore Apple's
+    # mount — including an interrupt, so the sequence is guarded by
+    # BaseException below.
     try:
         for entry in mounts():
-            if _serves_device(entry, device, mount_point) and not is_ours(
-                entry, device=device.device, run=run
+            if is_fuse_t(entry):
+                continue
+            if entry.source == device.device or (
+                entry.mount_point == mount_point
+                and entry.source.startswith("/dev/")
             ):
                 _unmount(entry.mount_point, run=run)
 
-        # 3. Wait for the device node to settle after the unmount.
+        # 4. Wait for the device node to settle after the unmount.
         if not _wait_for_device(device.device, run=run, sleep=sleep):
             _fail(
                 f"The device {device.device} for {device.label} did not reappear. "
@@ -231,7 +259,7 @@ def mount_volume(
                 run=run,
             )
 
-        # 4. Mount read-write through ntfs-3g.
+        # 5. Mount read-write through ntfs-3g.
         returncode, stderr = run(
             build_mount_args(
                 device.device,
@@ -244,7 +272,7 @@ def mount_volume(
             )
         )
 
-        # 5. Confirm the FUSE-T mount at the mount point actually appeared.
+        # 6. Confirm the FUSE-T mount at the mount point actually appeared.
         if returncode != 0 or not _wait_for_mount(
             mounts, mount_point, timeout=timeout, sleep=sleep
         ):
@@ -258,10 +286,10 @@ def mount_volume(
                 run=run,
             )
 
-        # 6. Apple can remount read-only at any moment; evict its competition.
+        # 7. Apple can remount read-only at any moment; evict its competition.
         _evict_apple_remounts(device.device, mount_point, mounts=mounts, run=run)
 
-        # 7. Prove the mount is writable, not merely present.
+        # 8. Prove the mount is writable, not merely present.
         try:
             (probe or _write_probe)(mount_point)
         except Exception as exc:
@@ -274,13 +302,13 @@ def mount_volume(
                 run=run,
             )
 
-        # 8. Prove the *invoking user* owns the mount. Step 7 ran as root, so a
+        # 9. Prove the *invoking user* owns the mount. Step 8 ran as root, so a
         # successful write there says nothing about an unprivileged write.
-        owner = (stat or _default_stat)(mount_point)
-        if (owner.st_uid, owner.st_gid) != (uid, gid):
+        mount_stat = (stat or _default_stat)(mount_point)
+        if (mount_stat.st_uid, mount_stat.st_gid) != (uid, gid):
             _fail(
                 f"{device.label} mounted at {mount_point} but owned by "
-                f"uid {owner.st_uid}, gid {owner.st_gid}, "
+                f"uid {mount_stat.st_uid}, gid {mount_stat.st_gid}, "
                 f"expected uid {uid}, gid {gid}.",
                 device_path=device.device,
                 mount_point=mount_point,
@@ -288,7 +316,7 @@ def mount_volume(
                 run=run,
             )
 
-        # 9. Report the ntfs-3g process serving the mount, when we can see it.
+        # 10. Report the ntfs-3g process serving the mount, when we can see it.
         pid = parse_pid(run(["pgrep", "-f", pid_pattern(device.device)])[1])
         return MountResult(volume=volume, mount_point=mount_point, pid=pid)
     except MountFailed:

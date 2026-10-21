@@ -164,12 +164,13 @@ This is the command that makes a volume writable. It:
 1. resolves the volume and refuses if the label is ambiguous;
 2. refuses a volume with no label — the label names the mount — before it
    touches anyone's mount (see [Limitations](#limitations));
-3. returns success immediately only when a FUSE-T mount whose serving
-   `ntfs-3g` process names *this* device already exists. A mount with the same
-   label on a different disk is not this volume's mount;
+3. returns success immediately when the volume already has a FUSE-T mount:
+   with a unique label any `fuse-t:/<label>` entry is this volume's, even if
+   `pgrep` cannot answer; with a shared label only a mount whose serving
+   `ntfs-3g` process names *this* device counts;
 4. creates the mount point if needed;
-5. unmounts whoever holds the device or that mount point — normally Apple's
-   read-only mount, or a same-label mount served by another disk;
+5. unmounts Apple's read-only mount of this device, or Apple's mount at that
+   mount point. It **never** unmounts a FUSE-T mount;
 6. waits for the device node to reappear (10 one-second attempts);
 7. runs `ntfs-3g <device> <mount point>` with
    `uid=<you>,gid=<your group>,umask=022,local,auto_xattr,noatime,volname=<label>`;
@@ -179,6 +180,18 @@ This is the command that makes a volume writable. It:
 10. checks with `stat` that the mount point is owned by *your* uid and gid —
     the probe ran as root, so it cannot prove that you can write;
 11. prints `mounted HD1 at /Volumes/HD1`.
+
+If `/Volumes/DATA` is already a read-write mount of another volume that shares
+this volume's label, `mount` refuses and names the path and the label instead of
+evicting the live mount:
+
+```
+ntfsmnt: mount point /Volumes/DATA is already a read-write mount; its volume
+shares the label 'DATA' with /dev/disk6s1 — unmount it before mounting this one
+```
+
+Unmount it first (by its mount point, or by the other volume's device node) and
+retry.
 
 If any step fails, Apple's read-only mount is restored before the command exits
 `1` with the reason. A mount that exists but cannot be written is a failure, not
@@ -210,10 +223,24 @@ It tries `diskutil unmount`, then `umount`. If the volume is busy it sends
 busy, it reports which mount point is in use and exits `1`; it never forces or
 kills with `SIGKILL`.
 
-Which mounts belong to the volume is decided by identity, not by label: a
-`fuse-t:` mount counts when the volume's own snapshot says it is read-write, or
-when the serving `ntfs-3g` process names this volume's device. A same-label
-volume on another disk is left alone.
+Which mounts belong to the volume is decided by identity, not by label. A
+`fuse-t:/<label>` entry can only belong to a volume with that label: when
+exactly one NTFS volume carries the label, the entry is that volume's and
+`pgrep` is only corroboration; when two or more share it, only the serving
+`ntfs-3g` process can decide. If the label is shared and `pgrep` cannot answer,
+`unmount` refuses with a manual instruction rather than guessing, and it never
+unmounts a `fuse-t:` entry that resolves to another volume:
+
+```
+ntfsmnt: The mount at /Volumes/HD1 appears to belong to another volume with the
+same label 'HD1'; it was not unmounted. If it should be gone, unmount it
+manually: sudo diskutil unmount /Volumes/HD1
+```
+
+If a busy volume is still mounted after `SIGTERM`, the read-only restore is
+skipped rather than forced through a live mount — mounting then would be
+refused or land at `/Volumes/HD1 1`. The command reports the restore as failed
+and leaves the read-write mount in place.
 
 If the read-only mount cannot be put back, the unmount still happened, so the
 command says so and exits `1`:
@@ -238,8 +265,9 @@ uv run ntfsmnt eject HD1
 Ejects the **parent disk** (for `/dev/disk4s1` that is `disk4`), so every volume
 on the same physical drive disappears with it. The guard is per-volume: `eject`
 refuses only when the named volume itself is still mounted — checked against the
-live mount table and the serving `ntfs-3g` process, so a same-label mount on
-another disk does not count — so a still-mounted sibling such as HD2 is ejected
+live mount table and the serving `ntfs-3g` process, so a mount served by a
+same-label volume does not count, while an entry `pgrep` cannot resolve refuses
+the eject — so a still-mounted sibling such as HD2 is ejected
 along with it. Re-plug the drive — or, if it is still attached, run
 `sudo diskutil mount /dev/disk4s1` and `sudo diskutil mount /dev/disk4s2` — to
 get both read-only mounts back.
@@ -365,8 +393,12 @@ What the tool will not do:
 - The **unmount command never forces** a busy volume: it reports the mount point
   and exits `1`. At **mount time**, Apple's read-only mount is evicted with
   `diskutil unmount`, falling back to `umount -f` if that fails.
+- **Never evicts a read-write FUSE-T mount.** A `fuse-t:` mount at the target
+  belongs to a volume, possibly one sharing the label; `mount` refuses and names
+  the path instead of unmounting it.
 - **Never** guesses between volumes with the same label; it lists candidates and
-  stops.
+  stops. `mount`, `unmount`, and `eject` refuse rather than touch a same-label
+  mount they cannot attribute.
 - **Never** leaves a failed mount half-applied: it restores Apple's read-only
   mount before exiting non-zero, including when the run is interrupted. The
   message says the mount was restored only when the mount table can be re-read
@@ -415,7 +447,10 @@ Start with `doctor`, unprivileged and then with `sudo`:
 | `mount`: `volume is marked dirty` | unreplayed NTFS journal | `--recover`, or `chkdsk` on Windows |
 | `mount`: `volume is hibernated` | Windows Fast Startup/hibernation | `--remove-hiberfile` (destroys the hibernated session), or boot Windows |
 | `mount`: `already mounted or files ... open` | busy volume | close files/Finder windows, unmount |
+| `mount`: `already a read-write mount` | another volume with the same label holds the mount point | unmount it first, then mount this volume |
 | `unmount`: `still in use` | open files or Spotlight | close them; do not force |
+| `unmount`: `appears to belong to another volume` | the mount is a same-label volume's; the snapshot misattributed it | unmount that mount point manually if it should be gone |
+| `unmount`: `Cannot tell whether` | shared label and `pgrep` cannot identify the server | check `mount`, then unmount manually |
 | `eject`: `is still mounted` | `eject` refuses only while the named volume is mounted | `unmount --keep-unmounted` first; siblings are not checked |
 | `no NTFS volume matching` | wrong label/device | `ntfsmnt list` |
 | `matches multiple volumes` | duplicate labels | use the device node or UUID |
@@ -454,7 +489,12 @@ If it is missing, `sudo diskutil mount /dev/disk4s1` restores it. Do not run
   mount time Apple's read-only mount is evicted with `diskutil unmount`,
   falling back to `umount -f`; the mount failure path likewise force-unmounts
   our own FUSE-T mount if `diskutil unmount` refuses it, before restoring the
-  read-only mount.
+  read-only mount. A FUSE-T mount is never evicted to make room for another
+  volume.
+- **Duplicate labels.** `list` and `status` attribute a `fuse-t:/<label>` entry
+  by label, so when two NTFS volumes share a label the mount may be shown on the
+  wrong row. `mount`, `unmount`, and `eject` resolve it by device and refuse when
+  they cannot; use the device node or UUID to name the right volume.
 - **Spotlight and Finder** can hold files open and block deletes or unmounts.
   The tool does not disable indexing.
 - **Hibernated and dirty volumes** are refused by default; the opt-in flags
