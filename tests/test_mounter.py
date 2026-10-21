@@ -3,7 +3,7 @@ import pytest
 from ntfsmnt import mounter
 from ntfsmnt.models import Device
 from ntfsmnt.mounttable import MountEntry
-from ntfsmnt.mounter import MountFailed, _write_probe, mount_volume
+from ntfsmnt.mounter import MountFailed, _parse_pid, _write_probe, mount_volume
 from ntfsmnt.volumes import Volume
 
 DEVICE = Device(
@@ -241,6 +241,29 @@ def test_device_never_appears_raises_without_mounting(fake_env):
     assert fake_env.ntfs3g_invocations() == 0
     assert len([c for c in fake_env.calls if c[0] == "test"]) == 10
     assert fake_env.slept == [1] * 9
+    assert fake_env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
+    assert fake_env.state("HD1") == "ro"
+
+
+def test_mount_point_creation_failure_is_mount_failed(fake_env, monkeypatch):
+    def deny(path):
+        raise PermissionError(13, "Permission denied", path)
+
+    monkeypatch.setattr(mounter, "_ensure_mount_point", deny)
+
+    with pytest.raises(MountFailed) as err:
+        fake_env.mount(state="unmounted")
+
+    message = str(err.value)
+    assert MOUNT_POINT in message
+    assert "Permission denied" in message
+    assert fake_env.ntfs3g_invocations() == 0
+
+
+def test_parse_pid_takes_first_integer_token():
+    assert _parse_pid("4242\n") == 4242
+    assert _parse_pid("pgrep: some warning\n4242\n") == 4242
+    assert _parse_pid("no such process") is None
 
 
 def test_real_probe_writes_reads_back_and_cleans_up(tmp_path):

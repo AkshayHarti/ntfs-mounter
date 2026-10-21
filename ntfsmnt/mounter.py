@@ -110,6 +110,19 @@ def _evict_apple_remounts(
             _unmount(entry.mount_point, run=run)
 
 
+def _restore_read_only(
+    *,
+    device_path: str,
+    mount_point: str,
+    entries: list[MountEntry],
+    run: Callable[[list[str]], tuple[int, str]],
+) -> None:
+    """Tear down our mount, then put Apple's read-only mount back, last of all."""
+    if _has_our_mount(entries, mount_point):
+        run(["diskutil", "unmount", mount_point])
+    run(["diskutil", "mount", device_path])
+
+
 def _fail(
     message: str,
     *,
@@ -118,18 +131,19 @@ def _fail(
     entries: list[MountEntry],
     run: Callable[[list[str]], tuple[int, str]],
 ) -> NoReturn:
-    """Tear down our mount, then put Apple's read-only mount back, last of all."""
-    if _has_our_mount(entries, mount_point):
-        run(["diskutil", "unmount", mount_point])
-    run(["diskutil", "mount", device_path])
+    _restore_read_only(
+        device_path=device_path, mount_point=mount_point, entries=entries, run=run
+    )
     raise MountFailed(message)
 
 
 def _parse_pid(text: str) -> int | None:
-    try:
-        return int(text.strip().split()[0])
-    except (IndexError, ValueError):
-        return None
+    for token in text.split():
+        try:
+            return int(token)
+        except ValueError:
+            continue
+    return None
 
 
 def mount_volume(
@@ -152,7 +166,12 @@ def mount_volume(
     if any(_serves_device(e, device, mount_point) and _is_ours(e) for e in mounts()):
         return MountResult(volume=volume, mount_point=mount_point, pid=None)
 
-    _ensure_mount_point(mount_point)
+    try:
+        _ensure_mount_point(mount_point)
+    except OSError as exc:
+        raise MountFailed(
+            f"Could not create mount point {mount_point}: {exc.strerror or exc}"
+        ) from exc
 
     # 2. Evict whoever holds the device (Apple's read-only mount, usually).
     for entry in mounts():
@@ -161,9 +180,13 @@ def mount_volume(
 
     # 3. Wait for the device node to settle after the unmount.
     if not _wait_for_device(device.device, run=run, sleep=sleep):
-        raise MountFailed(
+        _fail(
             f"The device {device.device} for {device.label} did not reappear. "
-            "Is the disk still connected?"
+            "Is the disk still connected?",
+            device_path=device.device,
+            mount_point=mount_point,
+            entries=mounts(),
+            run=run,
         )
 
     # 4. Mount read-write through ntfs-3g.
