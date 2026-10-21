@@ -1,3 +1,4 @@
+import re
 from subprocess import CalledProcessError
 
 import pytest
@@ -5,7 +6,7 @@ import pytest
 from ntfsmnt import mounter
 from ntfsmnt.models import Device
 from ntfsmnt.mounttable import MountEntry
-from ntfsmnt.mounter import MountFailed, _parse_pid, _write_probe, mount_volume
+from ntfsmnt.mounter import MountFailed, _write_probe, mount_volume
 from ntfsmnt.volumes import Volume
 
 DEVICE = Device(
@@ -17,32 +18,61 @@ DEVICE = Device(
     fs_type="Windows_NTFS",
     mount_point=None,
 )
+OTHER = Device(
+    identifier="disk6s1",
+    device="/dev/disk6s1",
+    label="DATA",
+    uuid="UUID-DATA",
+    size=1,
+    fs_type="Windows_NTFS",
+    mount_point=None,
+)
 MOUNT_POINT = "/Volumes/HD1"
+OTHER_MOUNT_POINT = "/Volumes/DATA"
 NTFS3G = "/usr/local/bin/ntfs-3g"
 
-APPLE_MOUNT = MountEntry(
-    source="/dev/disk4s1", mount_point=MOUNT_POINT, fs="ntfs", read_only=True
-)
-OURS = MountEntry(
-    source="fuse-t:/HD1", mount_point=MOUNT_POINT, fs="nfs", read_only=False
-)
+
+def ro_entry(device, mount_point):
+    return MountEntry(
+        source=device.device, mount_point=mount_point, fs="ntfs", read_only=True
+    )
+
+
+def rw_entry(device, mount_point):
+    label = device.label
+    return MountEntry(
+        source=f"fuse-t:/{label}", mount_point=mount_point, fs="nfs", read_only=False
+    )
+
+
+APPLE_MOUNT = ro_entry(DEVICE, MOUNT_POINT)
+OURS = rw_entry(DEVICE, MOUNT_POINT)
 # Apple's FSKit remounts the device read-only, next to ours when the name is taken.
-APPLE_REMOUNT = MountEntry(
-    source="/dev/disk4s1", mount_point="/Volumes/HD1 1", fs="ntfs", read_only=True
-)
+APPLE_REMOUNT = ro_entry(DEVICE, f"{MOUNT_POINT} 1")
 
 
 class FakeEnv:
-    """Scripted stand-in for the injected `run`, `mounts`, `sleep`, and probe."""
+    """A scripted host: one mount table, the live ntfs-3g processes behind it,
+    and a `run` that models the commands against both.
 
-    def __init__(self):
+    `pgrep` is answered by matching its pattern against the command line of the
+    recorded processes, and an ntfs-3g invocation that succeeds leaves both a
+    mount entry and a serving process behind — the real contract.
+    """
+
+    def __init__(self, mount_point=MOUNT_POINT):
         self.calls: list[list[str]] = []
-        self.entries: list[MountEntry] = []
+        self.table: list[MountEntry] = []
+        self.procs: list[list[str]] = []
+        self.points: dict[str, str] = {DEVICE.device: mount_point}
+        self.pid = 4242
+        self.slept: list[float] = []
+        self.write_probe_called = False
         self.ntfs3g_calls = 0
         self.evictions = 0
-        self.write_probe_called = False
-        self.slept: list[float] = []
+        self.mounts_broken = False
         self._ntfs3g_rc = 0
+        self._ntfs3g_mounts = True
         self._stderr = ""
         self._apple_returns = False
         self._apple_returned = False
@@ -59,82 +89,140 @@ class FakeEnv:
             return (0 if self._device_present else 1, "")
         if argv[0] == NTFS3G:
             self.ntfs3g_calls += 1
-            if self._ntfs3g_rc == 0:
-                self.entries = [OURS]
+            if self._ntfs3g_rc == 0 and self._ntfs3g_mounts:
+                self.table.append(
+                    MountEntry(
+                        source=f"fuse-t:/{volname(argv)}",
+                        mount_point=argv[2],
+                        fs="nfs",
+                        read_only=False,
+                    )
+                )
+                self.procs.append(list(argv))
             return (self._ntfs3g_rc, self._stderr)
         if argv[:2] == ["diskutil", "unmount"]:
-            if self.ntfs3g_calls and argv[2] != MOUNT_POINT:
+            if self.ntfs3g_calls and argv[2] != self.mount_point:
                 self.evictions += 1
             if self._diskutil_unmount_rc != 0:
                 return (self._diskutil_unmount_rc, "Resource busy")
             self._remove(argv[2])
             return (0, "")
         if argv[0] == "umount":
-            self._remove(argv[2])
+            self._remove(argv[-1])
             return (0, "")
         if argv[:2] == ["diskutil", "mount"]:
-            self.entries.append(APPLE_MOUNT)
+            point = self.points.get(argv[2], self.mount_point)
+            self.table.append(
+                MountEntry(source=argv[2], mount_point=point, fs="ntfs", read_only=True)
+            )
             return (0, "")
         if argv[0] == "pgrep":
-            return (0, "4242\n")
+            pattern = argv[2]
+            if any(re.search(pattern, " ".join(proc)) for proc in self.procs):
+                return (0, f"{self.pid}\n")
+            return (1, "")
         raise AssertionError(f"unexpected command: {argv}")
 
     def mounts(self):
         self._mount_reads += 1
+        if self.mounts_broken:
+            raise CalledProcessError(1, ["mount"])
         error_from = self._mounts_error_from
         if error_from is not None and self._mount_reads >= error_from:
             raise CalledProcessError(1, ["mount"])
         if self.ntfs3g_calls and self._apple_returns and not self._apple_returned:
             self._apple_returned = True
-            self.entries.append(APPLE_REMOUNT)
-        return list(self.entries)
+            self.table.append(APPLE_REMOUNT)
+        return list(self.table)
 
     def sleep(self, seconds):
         self.slept.append(seconds)
 
     def probe(self, mount_point):
-        assert mount_point == MOUNT_POINT
+        assert mount_point in (MOUNT_POINT, OTHER_MOUNT_POINT)
         self.write_probe_called = True
         if self._probe_error is not None:
             raise self._probe_error
 
-    # --- helpers ------------------------------------------------------------
-    def _remove(self, mount_point):
-        self.entries = [e for e in self.entries if e.mount_point != mount_point]
+    # --- scripting ----------------------------------------------------------
+    def seed(self, state, device=DEVICE, mount_point=None):
+        """Put the host in ``state`` for one device, served by a real process."""
+        point = mount_point or self.points.setdefault(device.device, self.mount_point)
+        self.points[device.device] = point
+        if state == "ro":
+            self.table = [ro_entry(device, point)]
+        elif state == "rw":
+            self.table = [rw_entry(device, point)]
+            self.serve(device, point)
+        else:
+            self.table = []
+        return point
 
-    def ntfs3g_invocations(self):
-        return sum(1 for call in self.calls if call[0] == NTFS3G)
+    def serve(self, device, mount_point):
+        """Record the ntfs-3g process and mount entry a real `ntfs-3g` leaves."""
+        if not any(
+            proc[1] == device.device and proc[2] == mount_point for proc in self.procs
+        ):
+            self.procs.append(
+                [NTFS3G, device.device, mount_point, "-o", f"volname={device.label}"]
+            )
+        if not any(e.mount_point == mount_point for e in self.table):
+            self.table.append(rw_entry(device, mount_point))
 
-    def state(self, label):
-        if any(e.fs == "nfs" and e.source == f"fuse-t:/{label}" for e in self.entries):
-            return "rw"
-        return "ro" if self.entries else "unmounted"
-
-    def mount(
+    def configure(
         self,
         *,
-        state="unmounted",
         ntfs3g_rc=0,
+        ntfs3g_mounts=True,
         stderr="",
         apple_returns=False,
         device_present=True,
         probe_error=None,
         diskutil_unmount_rc=0,
         mounts_error_from=None,
-        recover=False,
-        remove_hiberfile=False,
-        timeout=30,
     ):
-        self.entries = {"ro": [APPLE_MOUNT], "rw": [OURS], "unmounted": []}[state]
         self._ntfs3g_rc = ntfs3g_rc
+        self._ntfs3g_mounts = ntfs3g_mounts
         self._stderr = stderr
         self._apple_returns = apple_returns
         self._device_present = device_present
         self._probe_error = probe_error
         self._diskutil_unmount_rc = diskutil_unmount_rc
         self._mounts_error_from = mounts_error_from
+
+    def mount(
+        self,
+        *,
+        state="unmounted",
+        device=DEVICE,
+        mount_point=None,
+        seed=True,
+        recover=False,
+        remove_hiberfile=False,
+        timeout=30,
+        **configure_options,
+    ):
+        point = mount_point or self.points.get(device.device, self.mount_point)
+        if seed:
+            self.procs = []
+            self.seed(state, device, point)
+        self.configure(**configure_options)
+        return self.invoke(
+            device,
+            point,
+            recover=recover,
+            remove_hiberfile=remove_hiberfile,
+            timeout=timeout,
+        )
+
+    def invoke(self, device=DEVICE, mount_point=None, *, recover=False,
+               remove_hiberfile=False, timeout=30):
+        point = mount_point or self.points.get(device.device, self.mount_point)
         return mount_volume(
-            Volume(device=DEVICE, mounts=tuple(self.entries)),
+            Volume(
+                device=device,
+                mounts=tuple(self.volume_mounts(device, point)),
+            ),
             uid=501,
             gid=20,
             run=self.run,
@@ -145,6 +233,43 @@ class FakeEnv:
             recover=recover,
             remove_hiberfile=remove_hiberfile,
         )
+
+    # --- helpers ------------------------------------------------------------
+    @property
+    def mount_point(self):
+        return self.points[DEVICE.device]
+
+    def volume_mounts(self, device, point):
+        """What `build_volumes` would attribute to `device` in the live table."""
+        return [
+            entry
+            for entry in self.table
+            if entry.source == device.device
+            or (bool(device.label) and entry.source == f"fuse-t:/{device.label}")
+            or entry.mount_point == point
+        ]
+
+    def _remove(self, mount_point):
+        self.table = [e for e in self.table if e.mount_point != mount_point]
+        self.procs = [p for p in self.procs if p[2] != mount_point]
+
+    def ntfs3g_invocations(self):
+        return sum(1 for call in self.calls if call[0] == NTFS3G)
+
+    def pgrep_calls(self):
+        return [call for call in self.calls if call[0] == "pgrep"]
+
+    def state(self, label):
+        if any(e.fs == "nfs" and e.source == f"fuse-t:/{label}" for e in self.table):
+            return "rw"
+        return "ro" if self.table else "unmounted"
+
+
+def volname(argv):
+    options = argv[argv.index("-o") + 1]
+    return next(
+        part.split("=", 1)[1] for part in options.split(",") if part.startswith("volname=")
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -178,6 +303,31 @@ def test_idempotent_when_already_rw(fake_env):
     assert not [c for c in fake_env.calls if c[:2] == ["diskutil", "unmount"]]
 
 
+def test_same_label_mount_served_by_another_device_is_not_idempotent(fake_env):
+    # Drive A (disk4s1, label DATA) is read-write at /Volumes/DATA. Mounting
+    # drive B (disk6s1, also labelled DATA) must not look like our own mount
+    # just because the label and mount point match.
+    fake_env.points[OTHER.device] = OTHER_MOUNT_POINT
+    fake_env.procs = [[NTFS3G, DEVICE.device, OTHER_MOUNT_POINT, "-o", "volname=DATA"]]
+    fake_env.table = [MountEntry("fuse-t:/DATA", OTHER_MOUNT_POINT, "nfs", False)]
+    fake_env.configure()
+
+    result = fake_env.invoke(OTHER, OTHER_MOUNT_POINT)
+
+    mounted = [call for call in fake_env.calls if call[0] == NTFS3G]
+    assert [call[1] for call in mounted] == [OTHER.device]
+    assert result.mount_point == OTHER_MOUNT_POINT
+    assert result.pid == 4242
+
+
+def test_pgrep_uses_the_precise_device_pattern(fake_env):
+    fake_env.mount(state="rw")
+
+    assert fake_env.pgrep_calls() == [
+        ["pgrep", "-f", "ntfs-3g .*/dev/disk4s1( |$)"]
+    ]
+
+
 def test_evicts_competitor_before_mounting(fake_env):
     fake_env.mount(state="ro")
 
@@ -208,7 +358,7 @@ def test_failed_diskutil_unmount_falls_back_to_umount(fake_env):
 
 
 def test_live_table_wins_over_stale_volume_snapshot(fake_env):
-    fake_env.entries = [APPLE_MOUNT]
+    fake_env.table = [APPLE_MOUNT]
 
     result = mount_volume(
         Volume(device=DEVICE, mounts=(OURS,)),  # stale: claims read-write already
@@ -320,12 +470,6 @@ def test_mount_point_creation_failure_is_mount_failed(fake_env, monkeypatch):
     assert MOUNT_POINT in message
     assert "Permission denied" in message
     assert fake_env.ntfs3g_invocations() == 0
-
-
-def test_parse_pid_takes_first_integer_token():
-    assert _parse_pid("4242\n") == 4242
-    assert _parse_pid("pgrep: some warning\n4242\n") == 4242
-    assert _parse_pid("no such process") is None
 
 
 @pytest.mark.parametrize(

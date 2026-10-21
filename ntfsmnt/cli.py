@@ -19,7 +19,12 @@ from ntfsmnt.doctor import Check, Env, hard_failures, run_checks
 from ntfsmnt.mounter import MountFailed, MountResult, mount_volume
 from ntfsmnt.mounttable import read_mount_table
 from ntfsmnt.privileged import need_root
-from ntfsmnt.unmounter import UnmountFailed, eject_volume, unmount_volume
+from ntfsmnt.unmounter import (
+    UnmountFailed,
+    eject_volume,
+    has_mount,
+    unmount_volume,
+)
 from ntfsmnt.volumes import (
     AmbiguousVolume,
     NoSuchVolume,
@@ -281,7 +286,9 @@ def _cmd_eject(args: argparse.Namespace, collector: Callable[[], list[Volume]]) 
     volume = _lookup(args.label, collector())
     if volume is None:
         return 1
-    if volume.state != "unmounted":
+    # The snapshot can be stale and a label is not an identity: ask the live
+    # table and the serving processes before paying for a privilege prompt.
+    if has_mount(volume, run=real_run, mounts=read_mount_table):
         print(
             f"ntfsmnt: {volume.device.label} is still mounted. "
             "Unmount it first, then eject.",

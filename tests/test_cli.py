@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 
 import pytest
@@ -40,6 +41,22 @@ def make_volume(dev, mounts=()):
 
 def fake_volumes():
     return [make_volume(make_device())]
+
+
+def stub_host(monkeypatch, table=(), serving=()):
+    """Answer the live mount table and pgrep without touching the host."""
+
+    monkeypatch.setattr(ntfsmnt.cli, "read_mount_table", lambda: list(table))
+
+    def fake_run(argv):
+        if argv[0] == "pgrep":
+            for proc in serving:
+                if re.search(argv[2], " ".join(proc)):
+                    return (0, "4242\n")
+            return (1, "")
+        raise AssertionError(f"unexpected command: {argv}")
+
+    monkeypatch.setattr(ntfsmnt.cli, "real_run", fake_run)
 
 
 def test_json_schema(capsys):
@@ -262,6 +279,7 @@ def test_confirm_eof_exits_2(monkeypatch):
 def test_eject_refuses_mounted_volume_before_privilege(monkeypatch, capsys):
     root_calls = []
     monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
+    stub_host(monkeypatch, table=[OURS_RW])
     volumes = [make_volume(make_device(), mounts=[OURS_RW])]
     rc = main(["eject", "HD1"], collector=lambda: volumes)
     out, err = capsys.readouterr()
@@ -269,6 +287,47 @@ def test_eject_refuses_mounted_volume_before_privilege(monkeypatch, capsys):
     assert out == ""
     assert "Unmount it first" in err
     assert root_calls == []
+
+
+def test_eject_ignores_a_stale_same_label_mount(monkeypatch, capsys):
+    # The volume itself is unmounted; the only fuse-t:/HD1 entry in the table
+    # is served by another disk. It must not refuse this eject.
+    disposed = MountEntry(
+        source="fuse-t:/HD1", mount_point="/Volumes/HD1", fs="nfs", read_only=False
+    )
+    stub_host(
+        monkeypatch,
+        table=[disposed],
+        serving=[["/usr/local/bin/ntfs-3g", "/dev/disk9s1", "/Volumes/HD1", "-o", ""]],
+    )
+    root_calls = []
+    ejected = []
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
+    monkeypatch.setattr(
+        ntfsmnt.cli, "eject_volume", lambda volume, **kwargs: ejected.append(volume)
+    )
+
+    rc = main(["eject", "HD1"], collector=fake_volumes)
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out.strip() == "ejected HD1"
+    assert root_calls == [["eject", "/dev/disk4s1"]]
+    assert ejected
+
+
+def test_eject_guard_reads_the_live_table_not_the_snapshot(monkeypatch, capsys):
+    # The snapshot says read-write, but the live table is empty: the volume was
+    # unmounted since discovery, so the guard must not refuse on stale state.
+    stub_host(monkeypatch, table=[])
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+    monkeypatch.setattr(ntfsmnt.cli, "eject_volume", lambda volume, **kwargs: None)
+    volumes = [make_volume(make_device(), mounts=[OURS_RW])]
+
+    rc = main(["eject", "HD1"], collector=lambda: volumes)
+
+    assert rc == 0
+    assert "still mounted" not in capsys.readouterr().err
 
 
 def test_mount_json_output(monkeypatch, capsys):
@@ -295,6 +354,7 @@ def test_unmount_json_output(monkeypatch, capsys):
 
 def test_eject_reports_success(monkeypatch, capsys):
     root_calls = []
+    stub_host(monkeypatch)
     monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
     monkeypatch.setattr(ntfsmnt.cli, "eject_volume", lambda volume, **kwargs: None)
     rc = main(["eject", "HD1"], collector=fake_volumes)
@@ -306,6 +366,7 @@ def test_eject_reports_success(monkeypatch, capsys):
 
 def test_eject_json_replay_keeps_json(monkeypatch, capsys):
     root_calls = []
+    stub_host(monkeypatch)
     monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
     monkeypatch.setattr(ntfsmnt.cli, "eject_volume", lambda volume, **kwargs: None)
     assert main(["eject", "HD1", "--json"], collector=fake_volumes) == 0

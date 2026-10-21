@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
+from ntfsmnt.identity import is_ours, parse_pid, pid_pattern
 from ntfsmnt.models import Device
 from ntfsmnt.mounttable import MountEntry
 from ntfsmnt.options import build_mount_args, classify_mount_failure
@@ -39,6 +40,11 @@ def _is_ours(entry: MountEntry) -> bool:
 
 
 def _serves_device(entry: MountEntry, device: Device, mount_point: str) -> bool:
+    """Would this entry be a candidate for the device or the mount point?
+
+    A label match is only a candidate: the mount table cannot say which disk a
+    ``fuse-t:/<label>`` mount belongs to, so identity is decided by ``is_ours``.
+    """
     if entry.source == device.device or entry.mount_point == mount_point:
         return True
     return bool(device.label) and entry.source == f"fuse-t:/{device.label}"
@@ -145,15 +151,6 @@ def _fail(
     raise MountFailed(message)
 
 
-def _parse_pid(text: str) -> int | None:
-    for token in text.split():
-        try:
-            return int(token)
-        except ValueError:
-            continue
-    return None
-
-
 def mount_volume(
     volume: Volume,
     *,
@@ -170,8 +167,11 @@ def mount_volume(
     device = volume.device
     mount_point = volume.mount_point or f"/Volumes/{device.label}"
 
-    # 1. Already served by us: succeed without touching the stack.
-    if any(_serves_device(e, device, mount_point) and _is_ours(e) for e in mounts()):
+    # 1. Already served by us: succeed without touching the stack. The mount
+    # table cannot tell two same-label volumes apart, so only a mount whose
+    # process names *this* device counts. A same-label mount on another disk is
+    # a competitor at this mount point and is evicted below.
+    if any(is_ours(e, device=device.device, run=run) for e in mounts()):
         return MountResult(volume=volume, mount_point=mount_point, pid=None)
 
     try:
@@ -181,9 +181,12 @@ def mount_volume(
             f"Could not create mount point {mount_point}: {exc.strerror or exc}"
         ) from exc
 
-    # 2. Evict whoever holds the device (Apple's read-only mount, usually).
+    # 2. Evict whoever holds the device (Apple's read-only mount, usually) or
+    # the mount point (a same-label volume served by another disk).
     for entry in mounts():
-        if _serves_device(entry, device, mount_point) and not _is_ours(entry):
+        if _serves_device(entry, device, mount_point) and not is_ours(
+            entry, device=device.device, run=run
+        ):
             _unmount(entry.mount_point, run=run)
 
     # From here Apple's mount has been evicted: every exit must restore it.
@@ -244,7 +247,7 @@ def mount_volume(
             )
 
         # 9. Report the ntfs-3g process serving the mount, when we can see it.
-        pid = _parse_pid(run(["pgrep", "-f", device.device])[1])
+        pid = parse_pid(run(["pgrep", "-f", pid_pattern(device.device)])[1])
         return MountResult(volume=volume, mount_point=mount_point, pid=pid)
     except MountFailed:
         # _fail already restored the read-only mount before raising.

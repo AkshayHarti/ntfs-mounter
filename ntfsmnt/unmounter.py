@@ -14,6 +14,7 @@ stderr captured together; that is also where ``pgrep``'s pid list arrives.
 import re
 from collections.abc import Callable
 
+from ntfsmnt.identity import is_ours, parse_pid, pid_pattern
 from ntfsmnt.mounttable import MountEntry
 from ntfsmnt.volumes import Volume
 
@@ -29,26 +30,54 @@ def _is_ours(entry: MountEntry) -> bool:
     return entry.fs == "nfs" and entry.source.startswith("fuse-t:")
 
 
-def _serves_volume(entry: MountEntry, volume: Volume) -> bool:
-    """Would this FUSE-T entry be our mount for the volume?
+def _serves_volume(
+    entry: MountEntry,
+    volume: Volume,
+    *,
+    run: Callable[[list[str]], tuple[int, str]],
+) -> bool:
+    """Is this FUSE-T entry our mount for the volume?
 
-    The snapshot in ``volume`` can be stale: its mount point may be missing or
-    describe a different mount, and the FUSE-T source can keep a label the disk
-    no longer carries. A live mount at ``/Volumes/<label>`` is still ours.
+    A label is not an identity: a same-label volume on another disk produces the
+    same ``fuse-t:/<label>`` source and may even sit at the same path. The live
+    snapshot settles it when it says this volume is read-write; otherwise the
+    serving process must name this volume's device.
     """
-    device = volume.device
-    if bool(device.label) and entry.source == f"fuse-t:/{device.label}":
+    if (
+        volume.state == "rw"
+        and volume.mount_point is not None
+        and entry.mount_point == volume.mount_point
+    ):
         return True
-    if volume.mount_point is not None and entry.mount_point == volume.mount_point:
-        return True
-    return bool(device.label) and entry.mount_point == f"/Volumes/{device.label}"
+    return is_ours(entry, device=volume.device.device, run=run)
 
 
-def _mount_points(volume: Volume, entries: list[MountEntry]) -> list[str]:
+def _mount_points(
+    volume: Volume,
+    entries: list[MountEntry],
+    *,
+    run: Callable[[list[str]], tuple[int, str]],
+) -> list[str]:
     """Our mounts first, then Apple's, with each mount point listed once."""
-    ours = [e for e in entries if _is_ours(e) and _serves_volume(e, volume)]
+    ours = [
+        e for e in entries if _is_ours(e) and _serves_volume(e, volume, run=run)
+    ]
     apple = [e for e in entries if e.source == volume.device.device]
     return list(dict.fromkeys(e.mount_point for e in ours + apple))
+
+
+def has_mount(
+    volume: Volume,
+    *,
+    run: Callable[[list[str]], tuple[int, str]],
+    mounts: Callable[[], list[MountEntry]],
+) -> bool:
+    """Is the volume mounted — by a corroborated FUSE-T mount or by Apple?
+
+    Callers use this instead of ``volume.state`` where a stale same-label
+    ``fuse-t:`` entry in the snapshot must not count as this volume's mount.
+    """
+    return bool(_mount_points(volume, mounts(), run=run))
 
 
 def _is_busy(*texts: str) -> bool:
@@ -57,20 +86,6 @@ def _is_busy(*texts: str) -> bool:
 
 def _first_line(text: str) -> str:
     return next((line.strip() for line in text.splitlines() if line.strip()), "")
-
-
-def _parse_pid(text: str) -> int | None:
-    for token in text.split():
-        try:
-            return int(token)
-        except ValueError:
-            continue
-    return None
-
-
-def _pgrep_pattern(device_path: str) -> str:
-    """Match the ntfs-3g process serving the device, not any argv naming it."""
-    return f"ntfs-3g .*{re.escape(device_path)}"
 
 
 def _unmount(
@@ -91,7 +106,7 @@ def _unmount(
         outputs.append(output)
         if _is_busy(*outputs):
             # pgrep's pid list arrives in the combined-output slot.
-            pid = _parse_pid(run(["pgrep", "-f", _pgrep_pattern(device_path)])[1])
+            pid = parse_pid(run(["pgrep", "-f", pid_pattern(device_path)])[1])
             if pid is not None:
                 run(["kill", "-TERM", str(pid)])
                 sleep(1)
@@ -118,7 +133,7 @@ def unmount_volume(
     sleep: Callable[[float], None],
     keep_unmounted: bool = False,
 ) -> None:
-    mount_points = _mount_points(volume, mounts())
+    mount_points = _mount_points(volume, mounts(), run=run)
     if not mount_points:
         return
 
@@ -140,7 +155,7 @@ def eject_volume(
     mounts: Callable[[], list[MountEntry]],
     sleep: Callable[[float], None],
 ) -> None:
-    if _mount_points(volume, mounts()):
+    if has_mount(volume, run=run, mounts=mounts):
         name = volume.device.label or volume.device.device
         raise UnmountFailed(f"{name} is still mounted. Unmount it first, then eject.")
 

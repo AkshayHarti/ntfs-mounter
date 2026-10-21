@@ -1,8 +1,15 @@
+import re
+
 import pytest
 
 from ntfsmnt.models import Device
 from ntfsmnt.mounttable import MountEntry
-from ntfsmnt.unmounter import UnmountFailed, eject_volume, unmount_volume
+from ntfsmnt.unmounter import (
+    UnmountFailed,
+    eject_volume,
+    has_mount,
+    unmount_volume,
+)
 from ntfsmnt.volumes import Volume
 
 DEVICE = Device(
@@ -14,7 +21,19 @@ DEVICE = Device(
     fs_type="Windows_NTFS",
     mount_point=None,
 )
+# Same label, different disk: the review's way to tell an identity bug apart
+# from a working one.
+OTHER = Device(
+    identifier="disk6s1",
+    device="/dev/disk6s1",
+    label="HD1",
+    uuid="UUID-HD1-OTHER",
+    size=1,
+    fs_type="Windows_NTFS",
+    mount_point=None,
+)
 MOUNT_POINT = "/Volumes/HD1"
+NTFS3G = "/usr/local/bin/ntfs-3g"
 
 OURS = MountEntry(
     source="fuse-t:/HD1", mount_point=MOUNT_POINT, fs="nfs", read_only=False
@@ -24,18 +43,40 @@ APPLE = MountEntry(
 )
 
 
-class FakeEnv:
-    """Scripted stand-in for the injected `run`, `mounts`, and `sleep`."""
+def serve(device, mount_point):
+    return [NTFS3G, device.device, mount_point, "-o", f"volname={device.label}"]
 
-    def __init__(self, entries=()):
+
+class FakeEnv:
+    """Scripted stand-in for the injected `run`, `mounts`, and `sleep`.
+
+    The process table and `pgrep` are modelled: `pgrep` matches its pattern
+    against each recorded ntfs-3g command line, so identity has to be earned.
+    """
+
+    def __init__(self, entries=(), serving=None):
         self.calls: list[list[str]] = []
         self.entries: list[MountEntry] = list(entries)
+        if serving is not None:
+            self.procs: list[list[str]] = [list(proc) for proc in serving]
+        elif self._has_fuse_t():
+            # A FUSE-T entry in the table implies its serving process exists.
+            self.procs = [serve(DEVICE, MOUNT_POINT)]
+        else:
+            self.procs = []
+        self.points: dict[str, str] = {
+            DEVICE.device: MOUNT_POINT,
+            OTHER.device: MOUNT_POINT,
+        }
         self.sent_signals: list[str] = []
         self.slept: list[float] = []
         self._diskutil_unmount = (0, "")
         self._umount_results: list[tuple[int, str]] = []
         self._eject = (0, "")
-        self._pgrep = (0, "4242\n")
+        self._pgrep: tuple[int, str] | None = None
+
+    def _has_fuse_t(self):
+        return any(e.fs == "nfs" and e.source.startswith("fuse-t:") for e in self.entries)
 
     # --- injected callables -------------------------------------------------
     def run(self, argv):
@@ -53,12 +94,24 @@ class FakeEnv:
                 self._remove(argv[-1])
             return returncode, stderr
         if argv[:2] == ["diskutil", "mount"]:
-            self.entries.append(APPLE)
+            self.entries.append(
+                MountEntry(
+                    source=argv[2],
+                    mount_point=self.points.get(argv[2], MOUNT_POINT),
+                    fs="ntfs",
+                    read_only=True,
+                )
+            )
             return 0, ""
         if argv[:2] == ["diskutil", "eject"]:
             return self._eject
         if argv[0] == "pgrep":
-            return self._pgrep
+            if self._pgrep is not None:
+                return self._pgrep
+            pattern = argv[2]
+            if any(re.search(pattern, " ".join(proc)) for proc in self.procs):
+                return 0, "4242\n"
+            return 1, ""
         if argv[0] == "kill":
             self.sent_signals.append({"-TERM": "SIGTERM", "-9": "SIGKILL"}[argv[1]])
             return 0, ""
@@ -86,6 +139,7 @@ class FakeEnv:
     # --- assertions helpers -------------------------------------------------
     def _remove(self, mount_point):
         self.entries = [e for e in self.entries if e.mount_point != mount_point]
+        self.procs = [p for p in self.procs if p[2] != mount_point]
 
     def volume(self):
         return Volume(device=DEVICE, mounts=tuple(self.entries))
@@ -148,11 +202,11 @@ def test_unmount_evicts_apple_mount_when_that_is_all_that_is_mounted():
 
 
 @pytest.mark.parametrize("source", ["fuse-t:/HD1", "fuse-t:/HD1-old"])
-def test_unmount_finds_live_mount_when_snapshot_has_no_mount_point(source):
+def test_live_mount_is_found_when_pgrep_confirms_the_device(source):
     # The snapshot is stale: it knows of no mount, but FUSE-T still serves
     # /Volumes/HD1 (and may still carry a label the disk no longer has).
     stale = MountEntry(
-        source=source, mount_point="/Volumes/HD1", fs="nfs", read_only=False
+        source=source, mount_point=MOUNT_POINT, fs="nfs", read_only=False
     )
     env = FakeEnv([stale])
     volume = Volume(device=DEVICE, mounts=())
@@ -166,8 +220,24 @@ def test_unmount_finds_live_mount_when_snapshot_has_no_mount_point(source):
         keep_unmounted=True,
     )
 
-    assert env.calls[0] == ["diskutil", "unmount", "/Volumes/HD1"]
+    assert ["diskutil", "unmount", MOUNT_POINT] in env.calls
+    assert ["pgrep", "-f", "ntfs-3g .*/dev/disk4s1( |$)"] in env.calls
     assert env.state() == "unmounted"
+
+
+def test_unmount_of_another_volume_with_the_same_label_leaves_drive_a_alone():
+    # Drive A (disk4s1) is read-write at /Volumes/HD1. Drive B (disk6s1,
+    # unmounted) shares the label. Unmounting B must not touch A's mount.
+    drive_a = MountEntry(
+        source="fuse-t:/HD1", mount_point=MOUNT_POINT, fs="nfs", read_only=False
+    )
+    env = FakeEnv([drive_a])
+    volume = Volume(device=OTHER, mounts=())
+
+    unmount_volume(volume, run=env.run, mounts=env.mounts, sleep=env.sleep)
+
+    assert not [call for call in env.calls if call[0] in ("diskutil", "umount", "kill")]
+    assert env.entries == [drive_a]
 
 
 def test_unmount_refuses_busy_and_names_mount():
@@ -206,7 +276,7 @@ def test_unmount_uses_sigterm_never_sigkill():
 
     assert env.sent_signals == ["SIGTERM"]
     assert env.signals_in_argv() == []
-    assert ["pgrep", "-f", "ntfs-3g .*/dev/disk4s1"] in env.calls
+    assert ["pgrep", "-f", "ntfs-3g .*/dev/disk4s1( |$)"] in env.calls
     assert ["kill", "-TERM", "4242"] in env.calls
     assert env.slept == [1]
 
@@ -264,6 +334,32 @@ def test_unmount_reports_first_stderr_line_for_other_failures():
     assert str(excinfo.value) == "Volume is not mounted"
 
 
+def test_has_mount_is_false_for_a_same_label_entry_served_by_another_disk():
+    stale = MountEntry(
+        source="fuse-t:/HD1", mount_point=MOUNT_POINT, fs="nfs", read_only=False
+    )
+    env = FakeEnv([stale])
+    assert has_mount(Volume(device=OTHER, mounts=()), run=env.run, mounts=env.mounts) is False
+
+
+def test_has_mount_is_true_when_the_serving_process_names_the_device():
+    stale = MountEntry(
+        source="fuse-t:/HD1", mount_point=MOUNT_POINT, fs="nfs", read_only=False
+    )
+    env = FakeEnv([stale])
+    assert has_mount(Volume(device=DEVICE, mounts=()), run=env.run, mounts=env.mounts) is True
+
+
+def test_has_mount_is_true_for_an_apple_read_only_mount():
+    env = FakeEnv([APPLE])
+    assert has_mount(Volume(device=DEVICE, mounts=()), run=env.run, mounts=env.mounts) is True
+
+
+def test_has_mount_is_false_when_nothing_is_mounted():
+    env = FakeEnv()
+    assert has_mount(Volume(device=DEVICE, mounts=()), run=env.run, mounts=env.mounts) is False
+
+
 def test_eject_refuses_while_mounted():
     env = FakeEnv([OURS])
 
@@ -272,6 +368,18 @@ def test_eject_refuses_while_mounted():
 
     assert "unmount" in str(excinfo.value).lower()
     assert not any(call[:2] == ["diskutil", "eject"] for call in env.calls)
+
+
+def test_eject_ignores_a_same_label_mount_served_by_another_disk():
+    stale = MountEntry(
+        source="fuse-t:/HD1", mount_point=MOUNT_POINT, fs="nfs", read_only=False
+    )
+    env = FakeEnv([stale])
+    volume = Volume(device=OTHER, mounts=())
+
+    eject_volume(volume, run=env.run, mounts=env.mounts, sleep=env.sleep)
+
+    assert ["diskutil", "eject", "disk6"] in env.calls
 
 
 def test_eject_when_unmounted_uses_parent_disk_once():
