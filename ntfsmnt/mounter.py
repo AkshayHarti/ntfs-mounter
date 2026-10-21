@@ -128,13 +128,28 @@ def _restore_read_only(
     *,
     device_path: str,
     mount_point: str,
-    entries: list[MountEntry],
+    mounts: Callable[[], list[MountEntry]],
     run: Callable[[list[str]], tuple[int, str]],
-) -> None:
-    """Tear down our mount, then put Apple's read-only mount back, last of all."""
-    if _has_our_mount(entries, mount_point):
-        _unmount(mount_point, run=run)
+) -> str:
+    """Tear down our mount, then put Apple's read-only mount back, last of all.
+
+    The teardown is unconditional and its return code ignored: on a failure path
+    the only thing that matters is that nothing of ours keeps the mount point
+    busy. Apple's mount is restored by device, which is device-identified.
+
+    Returns the wording for a message about the outcome. Restoration is only
+    claimed when the mount table can be re-read and shows the device mounted;
+    otherwise the honest claim is that the restore was attempted.
+    """
+    _unmount(mount_point, run=run)
     run(["diskutil", "mount", device_path])
+    try:
+        entries = mounts()
+    except Exception:
+        return "Read-only restore attempted."
+    if any(entry.source == device_path for entry in entries):
+        return "Apple's read-only mount was restored."
+    return "Read-only restore attempted."
 
 
 def _fail(
@@ -142,13 +157,13 @@ def _fail(
     *,
     device_path: str,
     mount_point: str,
-    entries: list[MountEntry],
+    mounts: Callable[[], list[MountEntry]],
     run: Callable[[list[str]], tuple[int, str]],
 ) -> NoReturn:
-    _restore_read_only(
-        device_path=device_path, mount_point=mount_point, entries=entries, run=run
+    wording = _restore_read_only(
+        device_path=device_path, mount_point=mount_point, mounts=mounts, run=run
     )
-    raise MountFailed(message)
+    raise MountFailed(f"{message} {wording}")
 
 
 def mount_volume(
@@ -182,15 +197,16 @@ def mount_volume(
         ) from exc
 
     # 2. Evict whoever holds the device (Apple's read-only mount, usually) or
-    # the mount point (a same-label volume served by another disk).
-    for entry in mounts():
-        if _serves_device(entry, device, mount_point) and not is_ours(
-            entry, device=device.device, run=run
-        ):
-            _unmount(entry.mount_point, run=run)
-
-    # From here Apple's mount has been evicted: every exit must restore it.
+    # the mount point (a same-label volume served by another disk). From the
+    # first eviction on, every exit must restore Apple's mount — including an
+    # interrupt, so the whole sequence is guarded by BaseException below.
     try:
+        for entry in mounts():
+            if _serves_device(entry, device, mount_point) and not is_ours(
+                entry, device=device.device, run=run
+            ):
+                _unmount(entry.mount_point, run=run)
+
         # 3. Wait for the device node to settle after the unmount.
         if not _wait_for_device(device.device, run=run, sleep=sleep):
             _fail(
@@ -198,7 +214,7 @@ def mount_volume(
                 "Is the disk still connected?",
                 device_path=device.device,
                 mount_point=mount_point,
-                entries=_safe_mounts(mounts),
+                mounts=mounts,
                 run=run,
             )
 
@@ -220,17 +236,17 @@ def mount_volume(
             mounts, mount_point, timeout=timeout, sleep=sleep
         ):
             _fail(
-                classify_mount_failure(returncode=returncode, stderr=stderr),
+                classify_mount_failure(
+                    returncode=returncode, stderr=stderr, timeout=timeout
+                ),
                 device_path=device.device,
                 mount_point=mount_point,
-                entries=_safe_mounts(mounts),
+                mounts=mounts,
                 run=run,
             )
 
-        # 6. Apple can remount read-only at any moment; evict its competition,
-        # then re-read the table so the failure path below decides on reality.
+        # 6. Apple can remount read-only at any moment; evict its competition.
         _evict_apple_remounts(device.device, mount_point, mounts=mounts, run=run)
-        entries = _safe_mounts(mounts)
 
         # 7. Prove the mount is writable, not merely present.
         try:
@@ -238,11 +254,10 @@ def mount_volume(
         except Exception as exc:
             _fail(
                 f"{device.label} mounted at {mount_point} but the write check "
-                f"failed (the volume is not writable): {exc}. "
-                "Apple's read-only mount was restored.",
+                f"failed (the volume is not writable): {exc}.",
                 device_path=device.device,
                 mount_point=mount_point,
-                entries=entries,
+                mounts=mounts,
                 run=run,
             )
 
@@ -252,13 +267,15 @@ def mount_volume(
     except MountFailed:
         # _fail already restored the read-only mount before raising.
         raise
-    except Exception:
-        # Unexpected failure (e.g. the mount table cannot be read): put Apple's
-        # read-only mount back before letting the exception escape.
+    except BaseException:
+        # Unexpected failure or interrupt (e.g. the mount table cannot be read,
+        # or the user pressed Ctrl-C): put Apple's read-only mount back before
+        # letting the exception escape. `except MountFailed` above keeps the
+        # message path.
         _restore_read_only(
             device_path=device.device,
             mount_point=mount_point,
-            entries=_safe_mounts(mounts),
+            mounts=mounts,
             run=run,
         )
         raise

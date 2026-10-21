@@ -25,7 +25,18 @@ def build_mount_args(
     return [NTFS3G_BIN, device, mount_point, "-o", options]
 
 
-def classify_mount_failure(*, returncode: int, stderr: str) -> str:
+def classify_mount_failure(
+    *, returncode: int, stderr: str, timeout: int | None = None
+) -> str:
+    if returncode == 0:
+        # ntfs-3g exited cleanly, so "failed (exit code 0)" would be a lie: the
+        # mount simply never appeared in the table.
+        if timeout is None:
+            return "ntfs-3g exited successfully but the mount did not appear."
+        return (
+            "ntfs-3g exited successfully but the mount did not appear "
+            f"within {timeout} seconds."
+        )
     text = stderr.lower()
     # Specific, actionable causes first: ntfs-3g reports hibernated and dirty
     # volumes with a trailing "Operation not permitted", so EPERM alone must not

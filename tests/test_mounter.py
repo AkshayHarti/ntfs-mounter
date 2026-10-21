@@ -81,6 +81,8 @@ class FakeEnv:
         self._diskutil_unmount_rc = 0
         self._mount_reads = 0
         self._mounts_error_from: int | None = None
+        self._interrupt_at: int | None = None
+        self._break_mounts_on_probe = False
 
     # --- injected callables -------------------------------------------------
     def run(self, argv):
@@ -125,6 +127,10 @@ class FakeEnv:
 
     def mounts(self):
         self._mount_reads += 1
+        if self._interrupt_at is not None and self._mount_reads == self._interrupt_at:
+            # One interrupted read, like a Ctrl-C that lands mid-command.
+            self._interrupt_at = None
+            raise KeyboardInterrupt
         if self.mounts_broken:
             raise CalledProcessError(1, ["mount"])
         error_from = self._mounts_error_from
@@ -142,6 +148,8 @@ class FakeEnv:
         assert mount_point in (MOUNT_POINT, OTHER_MOUNT_POINT)
         self.write_probe_called = True
         if self._probe_error is not None:
+            if self._break_mounts_on_probe:
+                self.mounts_broken = True
             raise self._probe_error
 
     # --- scripting ----------------------------------------------------------
@@ -180,6 +188,8 @@ class FakeEnv:
         probe_error=None,
         diskutil_unmount_rc=0,
         mounts_error_from=None,
+        interrupt_at=None,
+        break_mounts_on_probe=False,
     ):
         self._ntfs3g_rc = ntfs3g_rc
         self._ntfs3g_mounts = ntfs3g_mounts
@@ -189,6 +199,8 @@ class FakeEnv:
         self._probe_error = probe_error
         self._diskutil_unmount_rc = diskutil_unmount_rc
         self._mounts_error_from = mounts_error_from
+        self._interrupt_at = interrupt_at
+        self._break_mounts_on_probe = break_mounts_on_probe
 
     def mount(
         self,
@@ -405,6 +417,49 @@ def test_probe_failure_restores_read_only(fake_env):
     assert [c for c in fake_env.calls if c == ["diskutil", "unmount", MOUNT_POINT]]
     assert fake_env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
     assert fake_env.state("HD1") == "ro"
+
+
+def test_verified_restore_is_reported_as_restored(fake_env):
+    with pytest.raises(MountFailed) as err:
+        fake_env.mount(state="ro", probe_error=OSError(30, "Read-only file system"))
+
+    message = str(err.value).lower()
+    assert "read-only mount was restored" in message
+    assert "attempted" not in message
+
+
+def test_interrupt_after_eviction_still_restores_read_only(fake_env):
+    # Apple's mount has been evicted when the mount-table read is interrupted.
+    with pytest.raises(KeyboardInterrupt):
+        fake_env.mount(state="ro", interrupt_at=3)
+
+    assert fake_env.ntfs3g_invocations() == 1
+    assert ["diskutil", "unmount", MOUNT_POINT] in fake_env.calls
+    assert fake_env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
+
+
+def test_unreadable_table_in_the_failure_tail_unmounts_then_attempts_restore(fake_env):
+    with pytest.raises(MountFailed) as err:
+        fake_env.mount(
+            state="ro",
+            probe_error=OSError(30, "Read-only file system"),
+            break_mounts_on_probe=True,
+        )
+
+    message = str(err.value).lower()
+    assert ["diskutil", "unmount", MOUNT_POINT] in fake_env.calls
+    assert fake_env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
+    assert "read-only restore attempted" in message
+    assert "was restored" not in message
+
+
+def test_successful_ntfs3g_without_a_mount_names_the_timeout(fake_env):
+    with pytest.raises(MountFailed) as err:
+        fake_env.mount(state="ro", ntfs3g_mounts=False, timeout=2)
+
+    message = str(err.value)
+    assert "did not appear within 2 seconds" in message
+    assert "exit code 0" not in message
 
 
 def test_unexpected_probe_error_restores_read_only(fake_env):

@@ -64,6 +64,20 @@ def test_classify_unclean_with_trailing_eperm():
     assert "Full Disk Access" not in msg
 
 
+def test_classify_success_without_a_mount_names_the_timeout():
+    msg = classify_mount_failure(returncode=0, stderr="", timeout=30)
+    assert msg == (
+        "ntfs-3g exited successfully but the mount did not appear within 30 seconds."
+    )
+    assert "exit code 0" not in msg
+
+
+def test_classify_success_without_a_mount_without_a_timeout():
+    msg = classify_mount_failure(returncode=0, stderr="")
+    assert "did not appear" in msg
+    assert "exit code 0" not in msg
+
+
 def test_classify_busy_unclean_and_generic():
     busy = classify_mount_failure(returncode=16, stderr="Resource busy")
     assert "mounted" in busy or "open" in busy
