@@ -43,8 +43,9 @@ def test_skips_blank_lines_and_preserves_order():
 
 
 def test_entry_for_returns_first_match_or_none():
-    entries = parse_mount_table((FIX / "mount_fuset.txt").read_text())
-    assert entry_for(entries, "/Volumes/HD1") is entries[0]
+    text = (FIX / "mount_ro.txt").read_text() + (FIX / "mount_fuset.txt").read_text()
+    entries = parse_mount_table(text)
+    assert entry_for(entries, "/Volumes/HD1").source == "/dev/disk4s1"
     assert entry_for(entries, "/Volumes/Nope") is None
 
 
