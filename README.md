@@ -241,6 +241,18 @@ same label 'HD1'; it was not unmounted. If it should be gone, unmount it
 manually: sudo diskutil unmount /Volumes/HD1
 ```
 
+A live mount that names a label the volume no longer carries is the relabelled
+case. It sits at the volume's own path, so it is not reported as unmounted:
+
+```
+ntfsmnt: A read-write mount at /Volumes/HD1-old serves this volume but its label
+differs from 'HD1': the entry carries 'HD1-old'. Unmount it manually with:
+sudo diskutil unmount /Volumes/HD1-old
+```
+
+`eject` counts that entry as mounted too: it refuses with "Unmount it first"
+instead of ejecting a disk that still has a live ntfs-3g mount on it.
+
 If a busy volume is still mounted after `SIGTERM`, the read-only restore is
 skipped rather than forced through a live mount — mounting then would be
 refused or land at `/Volumes/HD1 1`. The command reports the restore as failed
@@ -502,9 +514,10 @@ If it is missing, `sudo diskutil mount /dev/disk4s1` restores it. Do not run
   they cannot; use the device node or UUID to name the right volume.
 - **A relabelled volume's old mount is not claimed.** A FUSE-T mount records the
   label it was mounted with. If the volume has been relabelled since, its entry
-  names the old label, so `mount`, `unmount`, and `eject` treat it as another
-  volume's mount and leave it alone. Free it by mount point
-  (`sudo diskutil unmount /Volumes/<old>`) and mount again.
+  names the old label, so the tool cannot claim it: `mount` refuses at the
+  occupied path, `unmount` refuses with the manual instruction above, and
+  `eject` refuses rather than ejecting a disk under a live mount. Free it by
+  mount point (`sudo diskutil unmount /Volumes/<old>`) and mount again.
 - **Spotlight and Finder** can hold files open and block deletes or unmounts.
   The tool does not disable indexing.
 - **Hibernated and dirty volumes** are refused by default; the opt-in flags

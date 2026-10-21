@@ -514,6 +514,68 @@ def test_eject_guard_reads_the_live_table_not_the_snapshot(monkeypatch, capsys):
     assert "still mounted" not in capsys.readouterr().err
 
 
+def test_unmount_of_a_relabelled_live_mount_reports_failure_not_success(
+    monkeypatch, capsys
+):
+    # HD1 is live read-write at /Volumes/HD1-old, and the entry still carries
+    # the label the mount was created with. Printing "unmounted HD1" and exiting
+    # 0 would leave the volume read-write without saying so.
+    old = MountEntry(
+        source="fuse-t:/HD1-old",
+        mount_point="/Volumes/HD1-old",
+        fs="nfs",
+        read_only=False,
+    )
+    volumes = build_volumes([make_device(mount_point="/Volumes/HD1-old")], [old])
+    stub_host(
+        monkeypatch,
+        table=[old],
+        serving=[
+            ["/usr/local/bin/ntfs-3g", "/dev/disk4s1", "/Volumes/HD1-old", "-o", ""]
+        ],
+    )
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
+
+    rc = main(["unmount", "HD1"], collector=lambda: volumes)
+
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert out == ""
+    assert "/Volumes/HD1-old" in err
+    assert "unmounted HD1" not in err
+
+
+def test_eject_of_a_relabelled_live_mount_is_refused_before_privilege(
+    monkeypatch, capsys
+):
+    # Ejecting disk4 under a live ntfs-3g mount is destructive: the snapshot's
+    # path is occupied, so refuse before the sudo path is even replayed.
+    old = MountEntry(
+        source="fuse-t:/HD1-old",
+        mount_point="/Volumes/HD1-old",
+        fs="nfs",
+        read_only=False,
+    )
+    volumes = build_volumes([make_device(mount_point="/Volumes/HD1-old")], [old])
+    stub_host(
+        monkeypatch,
+        table=[old],
+        serving=[
+            ["/usr/local/bin/ntfs-3g", "/dev/disk4s1", "/Volumes/HD1-old", "-o", ""]
+        ],
+    )
+    root_calls = []
+    monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: root_calls.append(argv))
+
+    rc = main(["eject", "HD1"], collector=lambda: volumes)
+
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert out == ""
+    assert "Unmount it first" in err
+    assert root_calls == []
+
+
 def test_mount_json_output(monkeypatch, capsys):
     monkeypatch.setattr(ntfsmnt.cli, "need_root", lambda argv: None)
     monkeypatch.setattr(

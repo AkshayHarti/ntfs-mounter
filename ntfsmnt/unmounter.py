@@ -22,7 +22,13 @@ stderr captured together; that is also where ``pgrep``'s pid list arrives.
 import re
 from collections.abc import Callable
 
-from ntfsmnt.identity import names_label, owner, parse_pid, pid_pattern
+from ntfsmnt.identity import (
+    is_fuse_t,
+    names_label,
+    owner,
+    parse_pid,
+    pid_pattern,
+)
 from ntfsmnt.mounttable import MountEntry
 from ntfsmnt.volumes import Volume
 
@@ -70,6 +76,30 @@ def _classify(
         else:
             foreign.append(entry.mount_point)
     return own, foreign, unclear
+
+
+def _unclaimed_at(volume: Volume, entries: list[MountEntry]) -> MountEntry | None:
+    """The live FUSE-T entry at the snapshot's path that this volume cannot claim.
+
+    ``_classify`` drops an entry whose source names another label: it is not a
+    candidate for this volume's label, so no ``pgrep`` answer may claim it. But
+    ``build_volumes`` put this volume at that path, so something read-write is
+    serving the volume under the label the entry still carries — the relabelled
+    case. A same-label entry served by another disk is ``foreign`` instead and
+    stays out of this: that mount is not on this volume.
+    """
+    if volume.mount_point is None:
+        return None
+    return next(
+        (
+            entry
+            for entry in entries
+            if is_fuse_t(entry)
+            and entry.mount_point == volume.mount_point
+            and not names_label(entry, volume.device.label)
+        ),
+        None,
+    )
 
 
 def _is_busy(*texts: str) -> bool:
@@ -152,13 +182,18 @@ def has_mount(
     ``fuse-t:`` entry in the snapshot must not count as this volume's mount.
     With a shared label an entry ``pgrep`` cannot resolve counts as mounted:
     refusing an eject on a doubt is safe, guessing is not.
+
+    A live ``fuse-t:`` entry at the snapshot's mount point that no label can
+    claim counts as mounted too. The entry names a label the volume no longer
+    carries (a relabelled mount); ejecting the parent disk under it is exactly
+    the destructive guess this guard exists to prevent.
     """
     entries = mounts()
     own, _foreign, unclear = _classify(
         volume, entries, run=run, label_shared=label_shared
     )
     apple = [e for e in entries if e.source == volume.device.device]
-    return bool(own or unclear or apple)
+    return bool(own or unclear or apple or _unclaimed_at(volume, entries))
 
 
 def unmount_volume(
@@ -180,7 +215,10 @@ def unmount_volume(
     A ``fuse-t:`` entry is only torn down when it resolves to this volume. If
     the snapshot claimed the volume was read-write but the entry at that path
     belongs to another volume with the same label, nothing is unmounted and
-    :class:`UnmountFailed` says to do it by hand.
+    :class:`UnmountFailed` says to do it by hand. The same refusal covers a
+    relabelled mount: the entry at the snapshot's path names a label the volume
+    no longer carries, so nothing of ours can be claimed there — but something
+    read-write is live on the volume, and reporting success would leave it so.
     """
     entries = mounts()
     own, foreign, unclear = _classify(
@@ -209,6 +247,15 @@ def unmount_volume(
         )
     )
     if not mount_points:
+        unclaimed = _unclaimed_at(volume, entries)
+        if unclaimed is not None:
+            carried = unclaimed.source.removeprefix("fuse-t:/")
+            raise UnmountFailed(
+                f"A read-write mount at {unclaimed.mount_point} serves this "
+                f"volume but its label differs from '{volume.device.label}': "
+                f"the entry carries '{carried}'. Unmount it manually with: "
+                f"sudo diskutil unmount {unclaimed.mount_point}"
+            )
         return True
 
     error: BaseException | None = None

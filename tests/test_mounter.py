@@ -467,14 +467,21 @@ def test_mount_is_idempotent_for_its_own_label_while_another_label_is_mounted(
 
 def test_a_live_mount_elsewhere_does_not_count_as_idempotent(fake_env):
     # Our label is live at /Volumes/HD1-old, not at the requested mount point.
-    # Success there would claim a mount this path does not have.
+    # Success there would claim a mount this path does not have. The snapshot
+    # is what discovery returned before the mount moved; the table read during
+    # the run is the live one.
     stale = MountEntry("fuse-t:/HD1", "/Volumes/HD1-old", "nfs", False)
     fake_env.table = [stale]
     fake_env.procs = [[NTFS3G, DEVICE.device, "/Volumes/HD1-old", "-o", "volname=HD1"]]
     fake_env.configure()
+    discovered = next(
+        v for v in build_volumes([DEVICE], [OURS]) if v.device is DEVICE
+    )
+    assert discovered.state == "rw"
+    assert discovered.mount_point == MOUNT_POINT
 
     result = mount_volume(
-        Volume(device=DEVICE, mounts=(OURS,)),  # snapshot: read-write at MOUNT_POINT
+        discovered,  # snapshot: read-write at MOUNT_POINT
         uid=501,
         gid=20,
         run=fake_env.run,
@@ -495,6 +502,27 @@ def test_restore_does_not_unmount_what_is_not_a_fuse_t_mount(fake_env):
     with pytest.raises(MountFailed):
         fake_env.mount(state="unmounted", device_present=False)
 
+    assert not [call for call in fake_env.calls if call[:2] == ["diskutil", "unmount"]]
+    assert fake_env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
+
+
+def test_restore_leaves_an_apple_mount_at_the_mount_point_alone(fake_env):
+    # Apple remounted read-only at the target before the mount failed: the
+    # restore must not unmount Apple's own mount, only claim it back.
+    remounted = f"{MOUNT_POINT} 1"
+    apple_remount = ro_entry(DEVICE, remounted)
+
+    with pytest.raises(MountFailed) as err:
+        fake_env.mount(
+            state="unmounted",
+            mount_point=remounted,
+            ntfs3g_mounts=False,
+            apple_returns=True,
+            timeout=1,
+        )
+
+    assert "read-only mount was restored" in str(err.value).lower()
+    assert apple_remount in fake_env.table
     assert not [call for call in fake_env.calls if call[:2] == ["diskutil", "unmount"]]
     assert fake_env.calls[-1] == ["diskutil", "mount", "/dev/disk4s1"]
 

@@ -55,6 +55,25 @@ APPLE = MountEntry(
 HD2_OURS = MountEntry(
     source="fuse-t:/HD2", mount_point=HD2_MOUNT_POINT, fs="nfs", read_only=False
 )
+# A volume that was mounted read-write, then relabelled: discovery puts it at
+# the live path, but the entry still advertises the label the mount was made
+# with. `build_volumes` attributes it through the device's mount point.
+RELABELLED_MOUNT_POINT = "/Volumes/HD1-old"
+RELABELLED = Device(
+    identifier="disk4s1",
+    device="/dev/disk4s1",
+    label="HD1",
+    uuid="UUID-HD1",
+    size=1,
+    fs_type="Windows_NTFS",
+    mount_point=RELABELLED_MOUNT_POINT,
+)
+RELABELLED_ENTRY = MountEntry(
+    source="fuse-t:/HD1-old",
+    mount_point=RELABELLED_MOUNT_POINT,
+    fs="nfs",
+    read_only=False,
+)
 
 
 def serve(device, mount_point):
@@ -300,6 +319,49 @@ def test_an_entry_under_another_label_is_never_this_volumes_mount():
     assert restored is True
     assert env.diskutil_calls() == []
     assert env.entries == [foreign]
+
+
+def test_unmount_of_a_relabelled_live_mount_refuses_and_names_the_path():
+    # HD1 was mounted read-write, then relabelled: the live entry at the path
+    # the snapshot reports names the old label. Nothing there can be claimed as
+    # ours, but the volume is still read-write, so "unmounted" would be a lie.
+    env = FakeEnv(
+        [RELABELLED_ENTRY],
+        serving=[
+            [NTFS3G, DEVICE.device, RELABELLED_MOUNT_POINT, "-o", "volname=HD1-old"]
+        ],
+    )
+    volume = build_volumes([RELABELLED], env.mounts())[0]
+    assert volume.state == "rw"
+    assert volume.mount_point == RELABELLED_MOUNT_POINT
+
+    with pytest.raises(UnmountFailed) as excinfo:
+        unmount_volume(volume, run=env.run, mounts=env.mounts, sleep=env.sleep)
+
+    message = str(excinfo.value)
+    assert RELABELLED_MOUNT_POINT in message
+    assert "'HD1-old'" in message
+    assert "'HD1'" in message
+    assert f"sudo diskutil unmount {RELABELLED_MOUNT_POINT}" in message
+    assert env.calls == []
+    assert env.diskutil_calls() == []
+    assert env.entries == [RELABELLED_ENTRY]
+
+
+def test_unmount_of_an_ordinary_unmounted_volume_is_still_a_no_op():
+    # Nothing is live at the volume's path: the relabelled refusal must not turn
+    # the plain no-op into an error.
+    env = FakeEnv()
+    volume = build_volumes([DEVICE], env.mounts())[0]
+    assert volume.state == "unmounted"
+    assert volume.mount_point is None
+
+    assert (
+        unmount_volume(volume, run=env.run, mounts=env.mounts, sleep=env.sleep)
+        is True
+    )
+
+    assert env.calls == []
 
 
 def test_unmount_of_another_volume_with_the_same_label_refuses_and_leaves_a_alone():
@@ -579,6 +641,26 @@ def test_eject_refuses_while_mounted():
 
     assert "unmount" in str(excinfo.value).lower()
     assert not any(call[:2] == ["diskutil", "eject"] for call in env.calls)
+
+
+def test_eject_of_a_relabelled_live_mount_refuses_before_ejecting_the_disk():
+    # The live mount at HD1's path carries the old label, so `eject` cannot
+    # claim it — but ejecting disk4 under a live ntfs-3g mount is destructive.
+    env = FakeEnv(
+        [RELABELLED_ENTRY],
+        serving=[
+            [NTFS3G, DEVICE.device, RELABELLED_MOUNT_POINT, "-o", "volname=HD1-old"]
+        ],
+    )
+    volume = build_volumes([RELABELLED], env.mounts())[0]
+
+    assert has_mount(volume, run=env.run, mounts=env.mounts) is True
+    with pytest.raises(UnmountFailed) as excinfo:
+        eject_volume(volume, run=env.run, mounts=env.mounts, sleep=env.sleep)
+
+    assert "unmount" in str(excinfo.value).lower()
+    assert not [call for call in env.calls if call[:2] == ["diskutil", "eject"]]
+    assert env.entries == [RELABELLED_ENTRY]
 
 
 def test_eject_ignores_a_same_label_mount_served_by_another_disk():

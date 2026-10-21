@@ -13,7 +13,7 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 ## Commands
 
 - Install deps: `uv sync`
-- Test: `uv run pytest -q` (147 tests)
+- Test: `uv run pytest -q` (153 tests)
 - Manual acceptance: `tests/manual/acceptance.md` (real hardware, root, Full
   Disk Access terminal)
 - Build/run: `uv run ntfsmnt ...`
@@ -91,7 +91,10 @@ These are hard requirements. Do not weaken them in any change.
    room, and an unanswerable `pgrep` refuses rather than guesses.
 7. **An entry's own source is its identity.** Only `fuse-t:/<label>` can be this
    volume's mount; an entry naming another label is another volume's and is
-   never classified, unmounted, or counted as mounted for this one.
+   never classified or unmounted for this one. A `fuse-t:` entry sitting at the
+   snapshot's own path that no label can claim is the relabelled case: `unmount`
+   refuses with the path and the label the entry carries, and `eject` counts it
+   as mounted (fail closed) rather than ejecting a disk under a live mount.
 8. **No write without a probe.** `mounter.py` writes, reads back, and deletes
    `.ntfsmnt-probe`, then checks the mount point is owned by the invoking uid
    and gid, before reporting success.

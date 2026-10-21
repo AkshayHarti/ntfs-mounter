@@ -69,9 +69,10 @@ def owner(
 ) -> Ownership:
     """Which volume does this mount table entry belong to?
 
-    ``label`` is the volume's label; it is what makes the question hard, never
-    what settles it: ownership is decided by the device node and the process
-    serving the mount, because a label can be shared or stale.
+    ``label`` is the volume's label. The entry's own source settles candidacy:
+    an entry that does not name it is another volume's mount, and no process can
+    turn it into this one's. For a candidate the serving process has the last
+    word, because a label can be shared or stale.
 
     The entry's own source comes first: only ``fuse-t:/<label>`` can be this
     volume's mount, and anything else — Apple's mount, another label — is

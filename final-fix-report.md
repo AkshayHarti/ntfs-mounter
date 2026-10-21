@@ -174,3 +174,74 @@ review's findings exactly:
 
 With the fix: 1 touches only `/Volumes/HD1`, 2 makes no calls, 3 runs
 `ntfs-3g /dev/disk4s1 /Volumes/HD1`, 4 is False.
+
+## 2026-10-21 — third pass: a relabelled live mount is not invisible
+
+**Status:** fixed.
+**Commit:** `fix: refuse unmount and eject on an unclaimable live mount`
+**Tests:** `uv run pytest -q` → 153 passed.
+
+### What was still wrong
+
+HD1 was mounted read-write as `fuse-t:/HD1`, then relabelled. Discovery still
+reports it read-write at `/Volumes/HD1-old`, but the live entry is
+`fuse-t:/HD1-old on /Volumes/HD1-old`, which `_classify` drops: the source names
+another label, so the entry is nobody's candidate. `mount_points` was then
+empty, so:
+
+- `unmount HD1` returned True with zero `diskutil` calls and the CLI printed
+  `unmounted HD1`, exit 0, while the volume stayed read-write at that path.
+- `has_mount` was False, so `eject HD1` went on to `diskutil eject disk4` with a
+  live ntfs-3g mount on it.
+
+### What changed
+
+- `unmounter._unclaimed_at`: the `fuse-t:` entry at the snapshot's own mount
+  point whose source names a label this volume cannot claim. `_classify` is
+  untouched; this is a separate, narrower question.
+- `unmount_volume`: with no own mount point, an unclaimed entry at
+  `volume.mount_point` raises `UnmountFailed` naming the actual path and the
+  label the entry carries, with the manual `sudo diskutil unmount <path>`
+  instruction. Nothing is run. A volume with nothing at its path is still a
+  silent no-op.
+- `has_mount`: an unclaimed entry at the snapshot's path counts as mounted (fail
+  closed), so `eject` refuses instead of ejecting the parent disk. A same-label
+  entry `pgrep` attributes to another disk is still `foreign` and does not count:
+  ejecting this disk cannot touch that mount.
+- `identity.owner` docstring now matches the code: the source match settles
+  candidacy, and `pgrep` only decides between same-label candidates.
+- AGENTS.md invariant 7 and the README (unmount section, limitations) describe
+  the refusal; the AGENTS test count is 153.
+
+### Tests
+
+Snapshots built with the real `build_volumes`:
+
+- relabelled entry (`fuse-t:/HD1-old` at `/Volumes/HD1-old`, the device at that
+  path) + `unmount HD1` → `UnmountFailed` naming the path, the carried label and
+  the volume label, with the manual command; zero commands run; the entry stays
+  in the table.
+- same snapshot + `eject HD1` → refused with the unmount-first message; zero
+  `diskutil eject` calls. CLI level: exit 1, nothing on stdout, no `need_root`
+  replay.
+- same snapshot + CLI `unmount HD1` → exit 1, stderr only, no `unmounted HD1`.
+- ordinary unmounted volume (no entry at the path) → `unmount` still returns
+  True with zero calls.
+- `mount HD1` on that snapshot still refuses naming the occupant (`'HD1-old'`),
+  unchanged and green.
+
+Nits:
+
+- the empty-table restore test stays; a new
+  `test_restore_leaves_an_apple_mount_at_the_mount_point_alone` reaches the
+  restore with Apple's remount at the target and asserts no `diskutil unmount`.
+- `test_a_live_mount_elsewhere_does_not_count_as_idempotent` now takes its
+  snapshot from `build_volumes` (the discovery table) against the live table
+  that only holds `/Volumes/HD1-old`.
+
+### Verification
+
+`uv run pytest -q` → **153 passed** (147 before; 6 new).
+
+The four new regression tests fail against the previous `unmounter.py`; the
+no-op guard passes before and after, as intended.
