@@ -80,7 +80,8 @@ Run from the **Full Disk Access terminal**:
 sudo uv run ntfsmnt doctor; echo "exit=$?"
 ```
 
-Expect `exit=0` and `ok` on every line, including:
+Expect `exit=0` with `ok` on every line once the probed volume is not mounted,
+including:
 
 ```
 ok root: running as root
@@ -90,9 +91,19 @@ ok device-access: /dev/disk4s1 is readable/writable
 If `sudo: uv: command not found`, use the absolute path:
 `sudo "$(command -v uv)" run ntfsmnt doctor`.
 
-If `device-access` still fails as root, stop. That is the TCC/FDA signal:
-grant Full Disk Access to the terminal app, quit and reopen it, and repeat.
-Do not continue to Step 4 until this passes.
+If `device-access` reports `busy`, that is **not** a TCC failure: at this point
+HD1 is normally mounted read-only, so the probe's device is still in use.
+Unmount it, re-run the check, then restore the read-only mount:
+
+```bash
+diskutil unmount /dev/disk4s1
+sudo uv run ntfsmnt doctor
+diskutil mount /dev/disk4s1
+```
+
+Only a `Permission denied` / EPERM result as root is the TCC/FDA signal: grant
+Full Disk Access to the terminal app, quit and reopen it, and repeat. Do not
+continue to Step 4 until `device-access` has passed in an unmounted state.
 
 Rollback: none.
 
@@ -199,26 +210,33 @@ back with `sudo diskutil mount /dev/disk4s1`.
 ```bash
 uv run ntfsmnt unmount HD1 --keep-unmounted
 mount | grep HD1          # expect no output
-uv run ntfsmnt list       # expect HD1 unmounted
+uv run ntfsmnt list       # expect HD1 unmounted, HD2 still ro
+uv run ntfsmnt unmount HD2 --keep-unmounted
 uv run ntfsmnt eject HD1
 ```
 
-Expect `unmounted HD1` with **no** read-only mount restored, then `ejected HD1`.
+Expect `unmounted HD1` with **no** HD1 read-only mount restored and HD2 still
+`ro`; then `unmounted HD2`, leaving that volume unmounted too; then
+`ejected HD1`.
 
-`eject` acts on the parent disk, so it ejects the whole USB drive: HD2
-(`/dev/disk4s2`) disappears at the same time. That is expected, not a bug.
+`eject` acts on the parent disk, so it ejects the whole USB drive. The CLI's
+guard is per-volume: it refuses only when HD1 itself is still mounted, not when
+a sibling is. HD2 is unmounted first so that ejecting `disk4` does not take a
+mounted HD2 down with it.
 
-Restore afterwards by re-plugging the drive, or, if it is still attached:
+Restore afterwards by re-plugging the drive, or, if it is still attached, mount
+both partitions explicitly:
 
 ```bash
 diskutil mount /dev/disk4s1
+diskutil mount /dev/disk4s2
 ```
 
-Expect HD1 and HD2 back in `ro` state in `uv run ntfsmnt list`.
+Expect both read-only mounts back in `ro` state in `uv run ntfsmnt list`.
 
-Rollback: re-plugging is always safe. Do not eject while a volume from the same
-disk is mounted; the CLI refuses to eject a mounted volume and prints
-`HD1 is still mounted. Unmount it first, then eject.`
+Rollback: re-plugging is always safe. If HD1 itself is still mounted, `eject`
+refuses and prints `HD1 is still mounted. Unmount it first, then eject.` That
+guard does not cover HD2.
 
 ## Evidence to capture
 
@@ -233,13 +251,13 @@ task report; screenshots are not needed.
 | 4 | `uv run ntfsmnt mount HD1` | the CLI mounts and reports the mount point |
 | 4 | `mount \| grep HD1` | the mount is `fuse-t:/HD1 ... (nfs)`, not `ntfs ... read-only` |
 | 5 | `ls -ld /Volumes/HD1` | mount point is owned by the invoking uid, not root |
-| 5 | `printf ... && rm ...` | a normal user can write and delete on the volume |
+| 5 | `printf test > /Volumes/HD1/.ntfsmnt-acceptance` then `rm /Volumes/HD1/.ntfsmnt-acceptance` | a normal user can write and delete on the volume |
 | 6 | `uv run ntfsmnt status HD1` (+ `--json`) | effective state is `rw` |
 | 7 | `uv run ntfsmnt unmount HD1`, `mount \| grep HD1` | read-only fskit mount restored |
 | 7 | `uv run ntfsmnt list`, `pgrep -fl ntfs-3g` | state back to `ro`, no serving process left |
-| 8 | `unmount --keep-unmounted`, `mount \| grep HD1` | volume stays unmounted, nothing silently restored |
+| 8 | `unmount --keep-unmounted` for HD1 and HD2, `mount \| grep HD1` | volumes stay unmounted, nothing silently restored |
 | 8 | `uv run ntfsmnt eject HD1` | ejection succeeds on the parent disk |
-| 8 | `diskutil mount /dev/disk4s1` | the read-only state is recoverable |
+| 8 | `diskutil mount /dev/disk4s1`, `diskutil mount /dev/disk4s2` | both read-only mounts are recoverable |
 
 ## What unit tests do not cover, and why
 

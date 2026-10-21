@@ -17,6 +17,7 @@ $ uv run ntfsmnt mount HD1
 mounted HD1 at /Volumes/HD1
 
 $ printf hello > /Volumes/HD1/hello.txt     # no sudo
+$ rm /Volumes/HD1/hello.txt
 $ uv run ntfsmnt unmount HD1
 unmounted HD1
 ```
@@ -104,8 +105,9 @@ Prints one row per NTFS volume currently known to `diskutil`:
   read-only mount is present, `unmounted` otherwise.
 - `MOUNT` — mount point, or `-`.
 
-Volumes served by FUSE-T are NFS mounts, so `diskutil list` does not show them;
-`ntfsmnt list` combines `diskutil` device information with the live mount table.
+Volumes served by FUSE-T are NFS mounts: `diskutil list` still lists the
+partition, but it does not report our NFS mount as a mount point. `ntfsmnt list`
+combines `diskutil` device information with the live mount table.
 
 ### `doctor`
 
@@ -118,8 +120,8 @@ Checks, in order: macOS/architecture (informational), FUSE-T library present,
 first NTFS device can be opened read-write with `ntfs-3g.probe`. The licence
 line is informational.
 
-Every failing check prints a `fix:` line. Exit code is `1` when any hard check
-(`fuse-t`, `ntfs-3g`, `root`, `device-access`) fails, `0` otherwise.
+Checks that know a remedy print a `fix:` line. Exit code is `1` when any hard
+check (`fuse-t`, `ntfs-3g`, `root`, `device-access`) fails, `0` otherwise.
 
 Run it unprivileged to see the environment, and with `sudo` from the same
 terminal to check root and device access:
@@ -128,6 +130,11 @@ terminal to check root and device access:
 uv run ntfsmnt doctor          # root and device-access FAIL is expected
 sudo uv run ntfsmnt doctor     # every check should be ok
 ```
+
+If `device-access` fails as root, read the detail before assuming TCC. A `busy`
+result means the probed volume is still mounted: unmount it, re-run `doctor`,
+then remount. A `Permission denied` / `EPERM` result is the Full Disk Access
+signal.
 
 If `sudo` cannot find `uv`, use `sudo "$(command -v uv)" run ntfsmnt doctor`.
 
@@ -203,9 +210,11 @@ uv run ntfsmnt eject HD1
 ```
 
 Ejects the **parent disk** (for `/dev/disk4s1` that is `disk4`), so every volume
-on the same physical drive disappears with it. The volume must already be
-unmounted; `eject` refuses otherwise. Re-plug the drive — or, if it is still
-attached, run `diskutil mount /dev/disk4s1` — to get the read-only mounts back.
+on the same physical drive disappears with it. The guard is per-volume: `eject`
+refuses only when the named volume itself is still mounted, so a still-mounted
+sibling such as HD2 is ejected along with it. Re-plug the drive — or, if it is
+still attached, run `diskutil mount /dev/disk4s1` and `diskutil mount
+/dev/disk4s2` — to get both read-only mounts back.
 
 ## JSON output
 
@@ -303,7 +312,9 @@ What the tool will not do:
   *and* typed the volume label. `--recover` is passed only when you ask for it.
 - **Never** sends `SIGKILL` to `ntfs-3g`. The only signal it sends is `SIGTERM`,
   once, after a normal unmount failed as busy.
-- **Never** forces a busy unmount. It reports the mount point and exits `1`.
+- The **unmount command never forces** a busy volume: it reports the mount point
+  and exits `1`. At **mount time**, Apple's read-only mount is evicted with
+  `diskutil unmount`, falling back to `umount -f` if that fails.
 - **Never** guesses between volumes with the same label; it lists candidates and
   stops.
 - **Never** leaves a failed mount half-applied: it restores Apple's read-only
@@ -346,15 +357,18 @@ Start with `doctor`, unprivileged and then with `sudo`:
 | `ntfs-3g is not linked against FUSE-T` | macFUSE build or broken linkage | rebuild from `macos-fuse-t/ntfs-3g` |
 | `root: running as uid ...` unprivileged | expected before the sudo re-exec | run with `sudo`, or let `mount` re-exec |
 | `device-access: ... Permission denied` as root | terminal lacks FDA | grant Full Disk Access, restart the terminal |
-| `device-access: ... busy` | the volume is mounted | unmount it before probing |
+| `device-access: ... busy` | the probed volume is mounted; not a TCC failure | unmount it before probing |
 | `mount`: `Permission denied opening the disk` | FDA on the responsible terminal | same as above |
 | `mount`: `volume is marked dirty` | unreplayed NTFS journal | `--recover`, or `chkdsk` on Windows |
 | `mount`: `volume is hibernated` | Windows Fast Startup/hibernation | `--remove-hiberfile` (destroys the hibernated session), or boot Windows |
 | `mount`: `already mounted or files ... open` | busy volume | close files/Finder windows, unmount |
 | `unmount`: `still in use` | open files or Spotlight | close them; do not force |
-| `eject`: `is still mounted` | `eject` needs an unmounted volume | `unmount --keep-unmounted` first |
+| `eject`: `is still mounted` | `eject` refuses only while the named volume is mounted | `unmount --keep-unmounted` first; siblings are not checked |
 | `no NTFS volume matching` | wrong label/device | `ntfsmnt list` |
 | `matches multiple volumes` | duplicate labels | use the device node or UUID |
+
+Only a `Permission denied` / EPERM `device-access` failure at root points to
+Full Disk Access. A `busy` result just means the probed volume is mounted.
 
 If a mount attempt fails, check that Apple's read-only mount is back:
 
@@ -372,9 +386,9 @@ If it is missing, `sudo diskutil mount /dev/disk4s1` restores it. Do not run
   use requires a licence from the FUSE-T project. `doctor` prints this as an
   informational line; the tool does not enforce or check licensing.
 - **The mount is NFS, not a device mount.** `mount` shows `fuse-t:/HD1 on
-  /Volumes/HD1 (nfs)`, `diskutil list` does not show it, and an `ntfs-3g`
-  process serves it. Tools that assume a local block-device mount may behave
-  differently.
+  /Volumes/HD1 (nfs)`; `diskutil list` still lists the partition but does not
+  report the NFS mount as a mount point, and an `ntfs-3g` process serves it.
+  Tools that assume a local block-device mount may behave differently.
 - **Apple remount race.** macOS can remount the device read-only after the tool
   has evicted its mount. The tool evicts competitors and proves writability with
   a real write, but a future macOS release could make this race harder or
@@ -382,8 +396,10 @@ If it is missing, `sudo diskutil mount /dev/disk4s1` restores it. Do not run
 - **Not tested against BitLocker-encrypted or compressed NTFS volumes.** Only
   plain NTFS volumes were exercised. Treat those layouts as unsupported until
   tested.
-- **No force path.** Busy volumes are reported, never forced. There is no
-  `--force`, and `SIGKILL` is never used.
+- **No force option for unmount.** The `unmount` command reports a busy volume
+  instead of forcing it, there is no `--force`, and `SIGKILL` is never used. At
+  mount time only Apple's read-only mount is evicted, using `diskutil unmount`
+  with a `umount -f` fallback.
 - **Spotlight and Finder** can hold files open and block deletes or unmounts.
   The tool does not disable indexing.
 - **Hibernated and dirty volumes** are refused by default; the opt-in flags

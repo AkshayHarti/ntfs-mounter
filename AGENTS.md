@@ -87,8 +87,9 @@ These are hard requirements. Do not weaken them in any change.
 9. **All external effects go through injected callables.** Production passes
    `real_run`, `read_mount_table`, `time.sleep`, and the real probe; tests pass
    fakes. Every subprocess effect (`diskutil`, `ntfs-3g`, `mount`, `pgrep`,
-   `kill`) goes through `run`. `_ensure_mount_point` and `_write_probe` are
-   injected or monkeypatched in tests, so no test writes to `/Volumes`.
+   `kill`) goes through an injected callable (`run` or `read_mount_table`).
+   `_ensure_mount_point` and `_write_probe` are injected or monkeypatched in
+   tests, so no test writes to `/Volumes`.
 
 When changing `mounter.py` or `unmounter.py`, first verify the failure-path
 sequence still restores the read-only mount and does not add a `SIGKILL`.
