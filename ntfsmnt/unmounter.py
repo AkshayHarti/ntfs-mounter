@@ -6,7 +6,9 @@ SIGKILL. A busy volume is reported to the user instead of being forced; the
 read-only mount is put back only after the last unmount succeeded.
 
 Every side effect goes through the injected ``run``, ``mounts`` and ``sleep``
-callables, so the whole sequence runs without touching the host.
+callables, so the whole sequence runs without touching the host. ``run`` never
+raises and returns ``(returncode, combined_output)``, with stdout followed by
+stderr captured together; that is also where ``pgrep``'s pid list arrives.
 """
 
 import re
@@ -28,10 +30,18 @@ def _is_ours(entry: MountEntry) -> bool:
 
 
 def _serves_volume(entry: MountEntry, volume: Volume) -> bool:
+    """Would this FUSE-T entry be our mount for the volume?
+
+    The snapshot in ``volume`` can be stale: its mount point may be missing or
+    describe a different mount, and the FUSE-T source can keep a label the disk
+    no longer carries. A live mount at ``/Volumes/<label>`` is still ours.
+    """
     device = volume.device
     if bool(device.label) and entry.source == f"fuse-t:/{device.label}":
         return True
-    return volume.mount_point is not None and entry.mount_point == volume.mount_point
+    if volume.mount_point is not None and entry.mount_point == volume.mount_point:
+        return True
+    return bool(device.label) and entry.mount_point == f"/Volumes/{device.label}"
 
 
 def _mount_points(volume: Volume, entries: list[MountEntry]) -> list[str]:
@@ -58,6 +68,11 @@ def _parse_pid(text: str) -> int | None:
     return None
 
 
+def _pgrep_pattern(device_path: str) -> str:
+    """Match the ntfs-3g process serving the device, not any argv naming it."""
+    return f"ntfs-3g .*{re.escape(device_path)}"
+
+
 def _unmount(
     mount_point: str,
     device_path: str,
@@ -65,33 +80,34 @@ def _unmount(
     run: Callable[[list[str]], tuple[int, str]],
     sleep: Callable[[float], None],
 ) -> None:
-    stderrs: list[str] = []
+    outputs: list[str] = []
 
-    returncode, stderr = run(["diskutil", "unmount", mount_point])
+    returncode, output = run(["diskutil", "unmount", mount_point])
     if returncode != 0:
-        stderrs.append(stderr)
-        returncode, stderr = run(["umount", mount_point])
+        outputs.append(output)
+        returncode, output = run(["umount", mount_point])
 
     if returncode != 0:
-        stderrs.append(stderr)
-        if _is_busy(*stderrs):
-            pid = _parse_pid(run(["pgrep", "-f", device_path])[1])
+        outputs.append(output)
+        if _is_busy(*outputs):
+            # pgrep's pid list arrives in the combined-output slot.
+            pid = _parse_pid(run(["pgrep", "-f", _pgrep_pattern(device_path)])[1])
             if pid is not None:
                 run(["kill", "-TERM", str(pid)])
                 sleep(1)
-                returncode, stderr = run(["umount", mount_point])
+                returncode, output = run(["umount", mount_point])
                 if returncode != 0:
-                    stderrs.append(stderr)
+                    outputs.append(output)
 
     if returncode == 0:
         return
 
-    if _is_busy(*stderrs):
+    if _is_busy(*outputs):
         raise UnmountFailed(
             f"Could not unmount {mount_point}: it is still in use "
-            f"({_first_line(stderr)}). Close anything using it and try again."
+            f"({_first_line(output)}). Close anything using it and try again."
         )
-    raise UnmountFailed(_first_line(stderr) or f"Could not unmount {mount_point}")
+    raise UnmountFailed(_first_line(output) or f"Could not unmount {mount_point}")
 
 
 def unmount_volume(
@@ -129,8 +145,8 @@ def eject_volume(
         raise UnmountFailed(f"{name} is still mounted. Unmount it first, then eject.")
 
     identifier = _parent_disk(volume.device.identifier)
-    returncode, stderr = run(["diskutil", "eject", identifier])
+    returncode, output = run(["diskutil", "eject", identifier])
     if returncode != 0:
         raise UnmountFailed(
-            _first_line(stderr) or f"Could not eject {identifier}."
+            _first_line(output) or f"Could not eject {identifier}."
         )

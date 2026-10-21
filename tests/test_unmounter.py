@@ -35,7 +35,7 @@ class FakeEnv:
         self._diskutil_unmount = (0, "")
         self._umount_results: list[tuple[int, str]] = []
         self._eject = (0, "")
-        self._pgrep_output = "4242\n"
+        self._pgrep = (0, "4242\n")
 
     # --- injected callables -------------------------------------------------
     def run(self, argv):
@@ -58,7 +58,7 @@ class FakeEnv:
         if argv[:2] == ["diskutil", "eject"]:
             return self._eject
         if argv[0] == "pgrep":
-            return 0, self._pgrep_output
+            return self._pgrep
         if argv[0] == "kill":
             self.sent_signals.append({"-TERM": "SIGTERM", "-9": "SIGKILL"}[argv[1]])
             return 0, ""
@@ -71,14 +71,17 @@ class FakeEnv:
         self.slept.append(seconds)
 
     # --- scripting ----------------------------------------------------------
-    def unmount_returns(self, returncode, stderr=""):
-        self._diskutil_unmount = (returncode, stderr)
+    def unmount_returns(self, returncode, output=""):
+        self._diskutil_unmount = (returncode, output)
 
     def umount_returns(self, *results):
         self._umount_results = list(results)
 
-    def eject_returns(self, returncode, stderr=""):
-        self._eject = (returncode, stderr)
+    def eject_returns(self, returncode, output=""):
+        self._eject = (returncode, output)
+
+    def pgrep_returns(self, returncode, output=""):
+        self._pgrep = (returncode, output)
 
     # --- assertions helpers -------------------------------------------------
     def _remove(self, mount_point):
@@ -144,6 +147,29 @@ def test_unmount_evicts_apple_mount_when_that_is_all_that_is_mounted():
     assert env.state() == "ro"
 
 
+@pytest.mark.parametrize("source", ["fuse-t:/HD1", "fuse-t:/HD1-old"])
+def test_unmount_finds_live_mount_when_snapshot_has_no_mount_point(source):
+    # The snapshot is stale: it knows of no mount, but FUSE-T still serves
+    # /Volumes/HD1 (and may still carry a label the disk no longer has).
+    stale = MountEntry(
+        source=source, mount_point="/Volumes/HD1", fs="nfs", read_only=False
+    )
+    env = FakeEnv([stale])
+    volume = Volume(device=DEVICE, mounts=())
+    assert volume.mount_point is None
+
+    unmount_volume(
+        volume,
+        run=env.run,
+        mounts=env.mounts,
+        sleep=env.sleep,
+        keep_unmounted=True,
+    )
+
+    assert env.calls[0] == ["diskutil", "unmount", "/Volumes/HD1"]
+    assert env.state() == "unmounted"
+
+
 def test_unmount_refuses_busy_and_names_mount():
     env = FakeEnv([OURS])
     env.unmount_returns(1, "Resource busy")
@@ -180,8 +206,33 @@ def test_unmount_uses_sigterm_never_sigkill():
 
     assert env.sent_signals == ["SIGTERM"]
     assert env.signals_in_argv() == []
+    assert ["pgrep", "-f", "ntfs-3g .*/dev/disk4s1"] in env.calls
     assert ["kill", "-TERM", "4242"] in env.calls
     assert env.slept == [1]
+
+
+def test_busy_without_a_pid_still_reports_busy_and_never_signals():
+    env = FakeEnv([OURS])
+    env.unmount_returns(1, "Resource busy")
+    env.umount_returns((1, "Resource busy"))
+    env.pgrep_returns(1, "")
+
+    with pytest.raises(UnmountFailed) as excinfo:
+        unmount_volume(
+            env.volume(),
+            run=env.run,
+            mounts=env.mounts,
+            sleep=env.sleep,
+            keep_unmounted=True,
+        )
+
+    message = str(excinfo.value)
+    assert MOUNT_POINT in message
+    assert "close" in message.lower()
+    assert "Resource busy" in message
+    assert env.sent_signals == []
+    assert not any(call[0] == "kill" for call in env.calls)
+    assert env.calls.count(["umount", MOUNT_POINT]) == 1
 
 
 def test_unmount_retries_once_after_sigterm_and_succeeds():
