@@ -210,7 +210,8 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
     async def partial(request: Request, selected: str | None = None):
         require_session(settings, request)
         snap = await _state_for(svc)
-        chosen = selected or (snap.volumes[0].id if snap.volumes else "")
+        chosen = selected if selected is not None else (
+            snap.volumes[0].id if snap.volumes else "")
         return await _region_response(request, svc, snap, chosen)
 
     @app.get("/api/v1/state", response_model=StateModel)

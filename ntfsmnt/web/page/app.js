@@ -3,8 +3,8 @@
 /*
  * ntfsmnt client behaviour. No dependencies beyond the vendored htmx global.
  *
- * Every listener is delegated from `document`, because the volumes region is
- * replaced wholesale by htmx swaps and SSE-triggered refreshes.
+ * Every listener is delegated from `document` / `document.body`, because the
+ * volumes region is replaced wholesale by htmx swaps and SSE refreshes.
  */
 (function () {
   const EVENTS_URL = "/api/v1/events";
@@ -13,6 +13,21 @@
   const MOBILE_QUERY = "(max-width: 899.98px)";
 
   let pendingRefresh = false;
+
+  /* Region refreshes are single-flight with one trailing request. A replay
+     burst therefore collapses to at most two GETs. */
+  let inFlight = false;
+  let queuedRefresh = false;
+  let queuedSelection;
+
+  /* Focus intents survive the swap that replaces the nodes they refer to. */
+  let focusSelectionAfterSwap = false;
+  let focusSelectionId = null;
+  let focusListAfterSwap = false;
+  let restoreFocusAfterRefresh = false;
+
+  /* Mobile list mode: an explicit empty selection, not "pick the first". */
+  let listMode = false;
 
   /* ── Small helpers ───────────────────────────────────────────────────── */
 
@@ -23,6 +38,10 @@
   function selectedId() {
     const row = document.querySelector(".volume-row.is-selected");
     return row ? row.dataset.id : null;
+  }
+
+  function currentSelection() {
+    return listMode ? "" : selectedId();
   }
 
   function rows() {
@@ -40,43 +59,78 @@
     return document.querySelector("[data-confirm-open]") !== null;
   }
 
-  /* ── Region refresh ──────────────────────────────────────────────────── */
+  function hasActionError() {
+    return document.querySelector("#detail .action-error") !== null;
+  }
 
-  function refreshRegion(id) {
-    if (!window.htmx) return null;
-    if (!byId("volumes-region")) return null;
+  /* ── Region refresh: single-flight + trailing coalescing ─────────────── */
 
-    const chosen = id === undefined ? selectedId() : id;
-    const url = REGION_URL + "?selected=" + encodeURIComponent(chosen ?? "");
+  function finishRegion() {
+    inFlight = false;
+    if (!queuedRefresh) return;
+    queuedRefresh = false;
+    const next = queuedSelection;
+    queuedSelection = undefined;
+    sendRegion(next);
+  }
+
+  function sendRegion(chosen) {
+    inFlight = true;
+    let settled = false;
+
+    function settle() {
+      if (settled) return;
+      settled = true;
+      finishRegion();
+    }
+
+    const url =
+      REGION_URL + "?selected=" + encodeURIComponent(chosen ?? "");
     try {
       const request = window.htmx.ajax("GET", url, {
         target: "#volumes-region",
         swap: "outerHTML",
       });
-      return request && typeof request.then === "function" ? request : null;
+      if (request && typeof request.then === "function") {
+        request.then(settle, settle);
+      } else {
+        settle();
+      }
     } catch (_) {
-      return null;
+      settle();
     }
   }
 
+  function requestRegion(id) {
+    if (!window.htmx) return false;
+    if (!byId("volumes-region")) return false;
+
+    const chosen = id === undefined ? currentSelection() : id;
+    if (inFlight) {
+      queuedRefresh = true;
+      queuedSelection = chosen;
+      return true;
+    }
+    sendRegion(chosen);
+    return true;
+  }
+
+  /* Guided recovery wins: an inline action error stays until the next
+     successful action (or a swap that clears it) flushes the refresh. */
   function refreshIfIdle() {
     if (hasOpenConfirm()) {
       pendingRefresh = true;
-      return;
+      return false;
+    }
+    if (hasActionError()) {
+      pendingRefresh = true;
+      return false;
     }
     pendingRefresh = false;
-    refreshRegion();
+    return requestRegion();
   }
 
-  function afterRequest(request, callback) {
-    if (!request) {
-      callback();
-      return;
-    }
-    Promise.resolve(request).then(callback, callback);
-  }
-
-  /* ── Selection ───────────────────────────────────────────────────────── */
+  /* ── Focus after swaps ───────────────────────────────────────────────── */
 
   function focusAfterSelect(id) {
     if (isMobileLayout()) {
@@ -91,12 +145,60 @@
     if (row) row.focus();
   }
 
+  function focusConfirmTrigger() {
+    const trigger = document.querySelector("[data-confirm-trigger]");
+    if (trigger) trigger.focus();
+  }
+
+  function handleAfterSwap() {
+    if (focusSelectionAfterSwap) {
+      focusAfterSelect(focusSelectionId);
+      const rendered = selectedId();
+      if (rendered !== null && rendered === focusSelectionId) {
+        focusSelectionAfterSwap = false;
+        focusSelectionId = null;
+      }
+    } else if (focusListAfterSwap) {
+      const first = rows()[0];
+      if (first) first.focus();
+      const region = byId("volumes-region");
+      if (region && region.dataset.selected === "false") {
+        focusListAfterSwap = false;
+      }
+    }
+
+    if (restoreFocusAfterRefresh) {
+      restoreFocusAfterRefresh = false;
+      focusConfirmTrigger();
+    }
+
+    /* Flush a refresh deferred by an open confirm (e.g. the confirm-submit
+       POST swap). Clear the flag first so this cannot loop; with a request
+       already in flight the flush becomes the single trailing refresh. */
+    if (pendingRefresh && !hasOpenConfirm() && !hasActionError()) {
+      pendingRefresh = false;
+      requestRegion();
+    }
+  }
+
+  if (document.body) {
+    document.body.addEventListener("htmx:afterSwap", handleAfterSwap);
+  }
+
+  /* ── Selection ───────────────────────────────────────────────────────── */
+
   function selectVolume(id) {
     if (id === null || id === undefined) return;
-    const request = refreshRegion(id);
-    afterRequest(request, function () {
+    listMode = false;
+    focusListAfterSwap = false;
+    focusSelectionAfterSwap = true;
+    focusSelectionId = id;
+
+    if (!requestRegion(id)) {
+      focusSelectionAfterSwap = false;
+      focusSelectionId = null;
       focusAfterSelect(id);
-    });
+    }
   }
 
   function showList() {
@@ -108,8 +210,16 @@
       row.removeAttribute("aria-current");
     });
 
-    const first = rows()[0];
-    if (first) first.focus();
+    listMode = true;
+    focusSelectionAfterSwap = false;
+    focusSelectionId = null;
+    focusListAfterSwap = true;
+
+    if (!requestRegion("")) {
+      focusListAfterSwap = false;
+      const first = rows()[0];
+      if (first) first.focus();
+    }
   }
 
   function moveFocus(row, delta) {
@@ -174,16 +284,26 @@
       input.value = "";
       input.focus();
     }
+    syncConfirm(form);
   }
 
   function closeConfirm(form, restoreFocus) {
     const trigger = resetConfirm(form);
-    if (restoreFocus !== false && trigger && trigger.isConnected) {
-      trigger.focus();
+    const shouldFocus =
+      restoreFocus !== false && trigger !== null && trigger.isConnected;
+
+    if (!pendingRefresh) {
+      if (shouldFocus) trigger.focus();
+      return;
     }
-    if (pendingRefresh) {
-      pendingRefresh = false;
-      refreshIfIdle();
+
+    if (refreshIfIdle()) {
+      /* The region swap is about to replace the trigger: focus it then. */
+      if (shouldFocus) restoreFocusAfterRefresh = true;
+    } else {
+      /* Suppressed by an inline action error: restore focus immediately. */
+      restoreFocusAfterRefresh = false;
+      if (shouldFocus) trigger.focus();
     }
   }
 
@@ -191,7 +311,10 @@
     const input = form.querySelector("[data-confirm-input]");
     const submit = form.querySelector("[data-confirm-submit]");
     if (!input || !submit) return;
-    submit.disabled = input.value !== (form.dataset.label ?? "");
+
+    const label = form.dataset.label ?? "";
+    const matches = input.value !== "" && input.value === label;
+    submit.disabled = label === "" || !matches;
   }
 
   /* ── Copy buttons ────────────────────────────────────────────────────── */

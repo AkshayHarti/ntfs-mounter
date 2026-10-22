@@ -195,3 +195,12 @@ def test_mount_success_publishes_state_event(monkeypatch):
     r = c.post("/api/v1/volumes/UUID-1/mount", json={"label": "HD1"}, headers=auth(c))
     assert r.status_code == 200
     assert any("event: state" in f for f in svc.events.replay(0))
+
+
+def test_partial_empty_selection_means_no_selection():
+    c, _ = client()
+    c.get("/?token=tok")
+    r = c.get("/partials/volumes?selected=")
+    assert r.status_code == 200
+    assert 'data-selected="false"' in r.text
+    assert "Select a drive" in r.text
