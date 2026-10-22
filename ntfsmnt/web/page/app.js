@@ -216,6 +216,165 @@
     if (!exists) desiredSelection = null;
   }
 
+  /* ── Activity filter and result announcements ────────────────────────── */
+
+  /* The chosen filter survives region and detail swaps in this variable. */
+  let activityFilter = "volume";
+
+  /* True while an operation holds the lock; it keeps the confirm submit
+     disabled and tells the release path what to restore. */
+  let operationBusy = false;
+
+  /* The activity entry already announced, so a re-render stays quiet. */
+  let announcedActivity = null;
+
+  function activitySection() {
+    return document.querySelector("[data-activity-for]");
+  }
+
+  function activityRows() {
+    const section = activitySection();
+    return section ? Array.from(section.querySelectorAll(".log__row")) : [];
+  }
+
+  function applyActivityFilter() {
+    const section = activitySection();
+    if (!section) return;
+
+    const label = section.dataset.activityFor || "";
+    const showAll = activityFilter === "all";
+    let visible = 0;
+
+    activityRows().forEach(function (row) {
+      /* ActivityEntry carries only the volume label, so that is the key. */
+      const match = showAll || (row.dataset.activityVolume || "") === label;
+      row.hidden = !match;
+      if (match) visible += 1;
+    });
+
+    Array.from(section.querySelectorAll("[data-activity-filter]")).forEach(
+      function (button) {
+        const active =
+          button.dataset.activityFilter === (showAll ? "all" : "volume");
+        button.setAttribute("aria-pressed", active ? "true" : "false");
+        button.classList.toggle("is-active", active);
+      }
+    );
+
+    const empty = section.querySelector("[data-activity-filter-empty]");
+    if (empty) {
+      const hasList = section.querySelector(".log") !== null;
+      empty.hidden = showAll || !hasList || visible > 0;
+    }
+  }
+
+  /* Text only: the announced string is assembled from rendered text nodes,
+     never from HTML. */
+  function announceActivityResult() {
+    const live = byId("activity-live");
+    if (!live) return;
+
+    const row = activityRows().find(function (candidate) {
+      return !candidate.hidden;
+    });
+    if (!row) {
+      if (live.textContent !== "") live.textContent = "";
+      announcedActivity = null;
+      return;
+    }
+
+    function textOf(selector) {
+      const node = row.querySelector(selector);
+      return node ? node.textContent.trim() : "";
+    }
+
+    const head =
+      textOf(".log__action") + " " + textOf(".log__volume") + ": " +
+      textOf(".log__outcome") + ".";
+    const summary = textOf(".log__summary");
+    const text = summary ? head + " " + summary : head;
+
+    /* The same entry keeps its id across swaps, so a re-render does not
+       re-announce the result the user has already heard. */
+    const key = row.dataset.activityId || text;
+    if (key === announcedActivity) return;
+    announcedActivity = key;
+    live.textContent = text;
+  }
+
+  /* ── Operation notice (one operation at a time) ──────────────────────── */
+
+  function operationNotice() {
+    return document.querySelector("[data-operation-notice]");
+  }
+
+  function disableDetailActions() {
+    const detail = byId("detail");
+    if (!detail) return;
+    Array.from(detail.querySelectorAll('button[type="submit"]')).forEach(
+      function (button) {
+        if (button.disabled || button.hasAttribute("data-busy-disabled")) return;
+        button.disabled = true;
+        button.setAttribute("data-busy-disabled", "");
+      }
+    );
+  }
+
+  /* Only buttons this code disabled come back; a disabled action keeps its
+     server-rendered reason. */
+  function releaseDetailActions() {
+    Array.from(
+      document.querySelectorAll("#detail [data-busy-disabled]")
+    ).forEach(function (button) {
+      button.removeAttribute("data-busy-disabled");
+      const form = button.closest("[data-confirm-form]");
+      if (form) {
+        /* The confirm submit owns its disabled state; recompute it. */
+        syncConfirm(form);
+      } else {
+        button.disabled = false;
+      }
+    });
+  }
+
+  function showOperation(operation) {
+    operationBusy = Boolean(operation);
+    const notice = operationNotice();
+    if (!notice) return;
+    const detail = notice.querySelector("[data-operation-detail]");
+
+    if (operation) {
+      if (detail) {
+        detail.textContent =
+          ": " + String(operation.action ?? "") + " " +
+          String(operation.volume ?? "");
+      }
+      notice.hidden = false;
+      disableDetailActions();
+      return;
+    }
+
+    if (detail) detail.textContent = "";
+    notice.hidden = true;
+    releaseDetailActions();
+  }
+
+  /* The server-rendered notice is the source of truth on load and after a
+     swap, so a page opened during another tab's operation is busy too. */
+  function reconcileOperation() {
+    const notice = operationNotice();
+    if (!notice) {
+      operationBusy = false;
+      return;
+    }
+    operationBusy = !notice.hidden;
+    if (notice.hidden) {
+      releaseDetailActions();
+    } else {
+      disableDetailActions();
+    }
+  }
+
   /* ── htmx lifecycle ──────────────────────────────────────────────────── */
 
   function handleBeforeRequest(event) {
@@ -249,6 +408,9 @@
 
   function handleAfterSwap() {
     reconcileDesiredSelection();
+    applyActivityFilter();
+    announceActivityResult();
+    reconcileOperation();
 
     /* Flush a refresh deferred by an open confirm (e.g. the confirm-submit
        POST swap). Clear the flag first so this cannot loop; with a request
@@ -385,7 +547,8 @@
 
     const label = form.dataset.label ?? "";
     const matches = input.value !== "" && input.value === label;
-    submit.disabled = label === "" || !matches;
+    /* A busy operation keeps the confirm closed. */
+    submit.disabled = operationBusy || label === "" || !matches;
   }
 
   /* ── Copy buttons ────────────────────────────────────────────────────── */
@@ -468,6 +631,19 @@
        refresh re-renders the log. Building HTML from JSON here would be an
        XSS vector, so this event is deliberately ignored. */
     stream.addEventListener("activity", function () {});
+
+    /* `operation` carries {id, action, volume, started_at} on acquire and
+       null on release. Only text is written, never markup. */
+    stream.addEventListener("operation", function (event) {
+      let operation = null;
+      try {
+        operation = JSON.parse(event.data);
+      } catch (_) {
+        return;
+      }
+      if (operation !== null && typeof operation !== "object") return;
+      showOperation(operation);
+    });
   }
 
   /* ── Delegated events ────────────────────────────────────────────────── */
@@ -478,6 +654,14 @@
     const copyButton = event.target.closest("[data-copy]");
     if (copyButton) {
       copyFrom(copyButton);
+      return;
+    }
+
+    const filter = event.target.closest("[data-activity-filter]");
+    if (filter) {
+      activityFilter =
+        filter.dataset.activityFilter === "all" ? "all" : "volume";
+      applyActivityFilter();
       return;
     }
 
@@ -550,5 +734,7 @@
     if (document.visibilityState === "visible") refreshIfIdle();
   });
 
+  applyActivityFilter();
+  reconcileOperation();
   connect();
 })();

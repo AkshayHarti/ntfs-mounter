@@ -261,7 +261,7 @@ task report; screenshots are not needed.
 
 ## What unit tests do not cover, and why
 
-The 256 unit tests inject `run`, `mounts`, `sleep`, and `probe`, so they verify
+The 262 unit tests inject `run`, `mounts`, `sleep`, and `probe`, so they verify
 command sequences and messages but never touch a device. The web layer adds
 session-cookie, `X-NTFSMNT`, and `Origin` checks on top of the CLI safety model;
 it never bypasses it. These paths are therefore only exercised by hand, and

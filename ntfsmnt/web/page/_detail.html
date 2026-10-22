@@ -37,6 +37,10 @@
   </div>
   {% endif %}
 
+  <div class="operation" data-operation-notice {% if not state.operation %}hidden{% endif %} role="status">
+    <span class="operation__label">Working&hellip;</span><span data-operation-detail>{% if state.operation %}: {{ state.operation.action }} {{ state.operation.volume }}{% endif %}</span>
+  </div>
+
   {% if volume.actions %}
   <div class="actions" role="group" aria-label="Volume actions">
     {% for action in volume.actions %}
@@ -72,7 +76,6 @@
                 data-confirm-trigger
                 aria-controls="confirm-{{ volume.id }}"
                 aria-expanded="false"
-                data-label="{{ volume.label }}"
                 {%- if not option.enabled %} disabled{% endif %}>Remove hiberfile&hellip;</button>
         {% if option.reason %}<p class="reason">{{ option.reason }}</p>{% endif %}
 
