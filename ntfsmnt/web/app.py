@@ -103,7 +103,10 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
         except Exception:
             logger.exception("action %s on %s failed", action, volume_id)
             return _error(500, "internal", "Unexpected error; see the server log.")
-        await _publish_state(svc)
+        try:
+            await _publish_state(svc)
+        except Exception:
+            logger.exception("failed to publish state after %s on %s", action, volume_id)
         if result.ok:
             return result_model(result)
         error = result.error

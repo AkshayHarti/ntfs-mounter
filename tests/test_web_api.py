@@ -131,3 +131,15 @@ def test_wrong_label_is_volume_changed():
     r = c.post("/api/v1/volumes/UUID-1/mount", json={"label": "HD2"}, headers=auth(c))
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "volume_changed"
+
+
+def test_mount_success_publishes_state_event(monkeypatch):
+    from ntfsmnt.mounter import MountResult
+    import ntfsmnt.web.service as svc_mod
+    monkeypatch.setattr(
+        svc_mod, "mount_volume",
+        lambda volume, **kw: MountResult(volume, "/Volumes/HD1", 4242))
+    c, svc = client()
+    r = c.post("/api/v1/volumes/UUID-1/mount", json={"label": "HD1"}, headers=auth(c))
+    assert r.status_code == 200
+    assert any("event: state" in f for f in svc.events.replay(0))
