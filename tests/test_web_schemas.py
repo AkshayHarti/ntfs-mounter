@@ -2,8 +2,9 @@ import pytest
 
 pytest.importorskip("pydantic")
 
-from ntfsmnt.web.models import (ActionError, ActionResult, DoctorStatus, HostView,
-                                OwnerView, Snapshot, VolumeView)
+from ntfsmnt.web.models import (ActionError, ActionResult, ActionView,
+                                DoctorStatus, HostView, OptionView, OwnerView,
+                                Snapshot, VolumeView)
 from ntfsmnt.web.schemas import error_response, result_model, state_model
 
 
@@ -14,17 +15,22 @@ def snapshot():
         doctor=DoctorStatus("ok", "2026-10-22T14:00:00Z", ()),
         operation=None,
         volumes=(VolumeView(
-            id="UUID-1", device="/dev/disk4s1", label="HD1", uuid="UUID-1",
+            id="dev-disk4s1", device="/dev/disk4s1", label="HD1", uuid=None,
             size=10, fs="ntfs", state="ro", mount_point="/Volumes/HD1",
-            driver="fskit", pid=None),),
+            driver="fskit", pid=None,
+            actions=(ActionView("mount", True, None),),
+            options=(OptionView("recover", True, False, None),)),),
     )
 
 
 def test_state_round_trips_the_snapshot():
     data = state_model(snapshot()).model_dump(mode="json")
-    assert data["volumes"][0]["id"] == "UUID-1"
+    assert data["volumes"][0]["id"] == "dev-disk4s1"
     assert data["host"]["owner"] == {"uid": 501, "gid": 20}
     assert data["operation"] is None
+    assert data["volumes"][0]["actions"][0] == {
+        "name": "mount", "enabled": True, "reason": None,
+    }
 
 
 def test_error_response_keeps_next_step():

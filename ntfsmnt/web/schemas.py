@@ -50,7 +50,7 @@ class VolumeModel(BaseModel):
     id: str
     device: str
     label: str
-    uuid: str
+    uuid: str | None
     size: int
     fs: str
     state: str
