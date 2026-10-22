@@ -308,3 +308,30 @@ async def _publish_state(svc: Service, app: FastAPI) -> str:
         svc.events.publish("state", payload)
         app.state.last_state_json = _state_key(payload)
         return app.state.last_state_json
+
+
+def run_server(settings: Settings) -> None:
+    import socket
+    import uvicorn
+    from ntfsmnt.web.config import with_port
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((settings.host, settings.port))
+    port = sock.getsockname()[1]
+    settings = with_port(settings, port)
+    url = f"http://127.0.0.1:{port}/?token={settings.token}"
+    print(f"ntfsmnt web: {url}", flush=True)
+    if settings.open_browser:
+        import webbrowser
+        webbrowser.open(url)
+    config = uvicorn.Config(
+        create_app(settings), host=settings.host, port=port,
+        log_level="warning", access_log=False,
+    )
+    try:
+        uvicorn.Server(config).run(sockets=[sock])
+    except KeyboardInterrupt:
+        # uvicorn re-raises the captured SIGINT after a graceful shutdown; the
+        # Ctrl-C that stops the service is not an error.
+        pass

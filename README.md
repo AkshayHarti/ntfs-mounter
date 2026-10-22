@@ -82,6 +82,7 @@ ntfsmnt status <volume> [--json]
 ntfsmnt mount <volume> [--recover] [--remove-hiberfile] [--json]
 ntfsmnt unmount <volume> [--keep-unmounted] [--json]
 ntfsmnt eject <volume> [--json]
+ntfsmnt web [--port N] [--open] [--owner UID:GID]
 ```
 
 A `<volume>` can be a label (`HD1`), a device node (`/dev/disk4s1`), a diskutil
@@ -287,6 +288,50 @@ the eject — so a still-mounted sibling such as HD2 is ejected
 along with it. Re-plug the drive — or, if it is still attached, run
 `sudo diskutil mount /dev/disk4s1` and `sudo diskutil mount /dev/disk4s2` — to
 get both read-only mounts back.
+
+## Web UI
+
+An optional local web UI shows the same volumes and performs the same mount,
+unmount, and eject operations as the CLI. It is not installed by default; the
+`web` extra adds FastAPI, uvicorn, and Jinja2:
+
+```bash
+uv sync --extra web                     # from a checkout
+uv tool install 'ntfsmnt[web]'          # installed command
+```
+
+Start it explicitly as root:
+
+```bash
+sudo uv run ntfsmnt web                 # bind an OS-chosen loopback port
+sudo uv run ntfsmnt web --open          # also open the browser
+sudo uv run ntfsmnt web --port 8765     # bind a fixed port
+sudo uv run ntfsmnt web --owner 501:20  # mount owner, when SUDO_UID/GID is absent
+```
+
+It prints one line and keeps running until `Ctrl-C`:
+
+```
+ntfsmnt web: http://127.0.0.1:8765/?token=<random>
+```
+
+The URL is loopback-only. The token is a one-time launch secret: opening the URL
+exchanges it for an HttpOnly session cookie and redirects to `/`, so the token
+leaves the address bar but remains the capability for that session. Treat the
+printed URL as a password for the duration of the run; restarting the command
+generates a new token.
+
+Started **without root**, the server runs read-only: the page shows a read-only
+banner, action buttons stay disabled, and the mutation API answers `403`. It
+still lists volumes and their states. `--owner` defaults to `SUDO_UID`/`SUDO_GID`
+from the sudo environment; a root launch with neither those variables nor
+`--owner` is also read-only, because mounts would otherwise be owned by root.
+
+Closing the browser tab does **not** unmount, eject, or otherwise change any
+volume: the server keeps running until `Ctrl-C`, and the mounts it made persist
+after it exits. The CLI remains the source of truth — the page calls the same
+mount, unmount, and eject code, and `ntfsmnt list` is always the authoritative
+view of the current state regardless of what a stale page shows.
 
 ## JSON output
 

@@ -179,6 +179,11 @@ def _build_parser() -> argparse.ArgumentParser:
     eject.add_argument("label")
     eject.add_argument("--json", action="store_true")
 
+    web = sub.add_parser("web", help="serve the local web UI")
+    web.add_argument("--port", type=int, default=0)
+    web.add_argument("--open", action="store_true")
+    web.add_argument("--owner", default=None, metavar="UID:GID")
+
     return parser
 
 
@@ -354,6 +359,29 @@ def _cmd_eject(args: argparse.Namespace, collector: Callable[[], list[Volume]]) 
     return 0
 
 
+def _cmd_web(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
+    try:
+        from ntfsmnt.web.app import run_server
+        from ntfsmnt.web.config import settings_from
+    except ImportError:
+        print(
+            "ntfsmnt: the web UI needs optional dependencies; "
+            "install with `uv tool install 'ntfsmnt[web]'`",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        settings = settings_from(
+            port=args.port, owner=args.owner, environ=os.environ,
+            euid=os.geteuid(), open_browser=args.open,
+        )
+    except ValueError as exc:
+        print(f"ntfsmnt: {exc}", file=sys.stderr)
+        return 2
+    run_server(settings)
+    return 0
+
+
 COMMANDS = {
     "list": _cmd_list,
     "status": _cmd_status,
@@ -361,6 +389,7 @@ COMMANDS = {
     "mount": _cmd_mount,
     "unmount": _cmd_unmount,
     "eject": _cmd_eject,
+    "web": _cmd_web,
 }
 
 
