@@ -1,0 +1,153 @@
+{%- set chip_copy = {"rw": "writable", "ro": "read-only", "unmounted": "unmounted", "error": "error"} -%}
+{%- set action_labels = {"mount": "Make writable", "unmount": "Unmount", "eject": "Eject"} -%}
+{%- set ns = namespace(volume=None) -%}
+{%- for candidate in state.volumes -%}
+  {%- if candidate.id == selected -%}{%- set ns.volume = candidate -%}{%- endif -%}
+{%- endfor -%}
+{%- set volume = ns.volume -%}
+<section id="detail" class="detail" aria-labelledby="detail-title">
+  {% if not volume %}
+  <p class="empty">Select a drive to see its actions.</p>
+  {% else %}
+  <a class="back" href="#volumes-region" data-show-list>&larr; All drives</a>
+
+  <header class="detail__head">
+    <h2 class="detail__title" id="detail-title">{{ volume.label or "Untitled volume" }}</h2>
+    <span class="chip chip--{{ volume.state }}">{{ chip_copy.get(volume.state, volume.state) }}</span>
+  </header>
+
+  <p class="detail__meta">
+    <span class="detail__device">{{ volume.device }}</span>
+    <span class="detail__size">{% if volume.size >= 1000000000000 %}{{ "%.1f"|format(volume.size / 1000000000000) }} TB{% elif volume.size >= 1000000000 %}{{ "%.1f"|format(volume.size / 1000000000) }} GB{% elif volume.size >= 1000000 %}{{ "%.1f"|format(volume.size / 1000000) }} MB{% else %}{{ volume.size }} B{% endif %}</span>
+    {% if volume.uuid %}<span class="detail__uuid">UUID {{ volume.uuid }}</span>{% endif %}
+    <span class="detail__mount">{% if volume.mount_point %}mounted at {{ volume.mount_point }}{% else %}not mounted{% endif %}</span>
+    {% if volume.driver %}<span class="detail__driver">{{ volume.driver }}{% if volume.pid %}, pid {{ volume.pid }}{% endif %}</span>{% endif %}
+  </p>
+
+  {% if error %}
+  <div class="action-error" role="alert">
+    <p class="action-error__message">{{ error.message }}</p>
+    {% if error.next_step %}<p class="action-error__next">{{ error.next_step }}</p>{% endif %}
+    {% if error.detail %}
+    <details class="action-error__detail">
+      <summary>Details</summary>
+      <pre>{{ error.detail }}</pre>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if volume.actions %}
+  <div class="actions" role="group" aria-label="Volume actions">
+    {% for action in volume.actions %}
+    {% set reason_id = "reason-" ~ action.name %}
+    <form class="action"
+          method="post"
+          action="/api/v1/volumes/{{ volume.id }}/{{ action.name }}"
+          hx-post="/api/v1/volumes/{{ volume.id }}/{{ action.name }}"
+          hx-headers='{"X-NTFSMNT":"1"}'
+          hx-target="#detail"
+          hx-swap="outerHTML"
+          data-action="{{ action.name }}">
+      <input type="hidden" name="label" value="{{ volume.label }}">
+      {% if volume.size is not none %}<input type="hidden" name="size" value="{{ volume.size }}">{% endif %}
+      <button type="submit"
+              class="btn btn--primary"
+              {%- if not action.enabled %} disabled aria-describedby="{{ reason_id }}"{% endif %}>{{ action_labels.get(action.name, action.name) }}</button>
+      {% if action.reason %}<span class="reason" id="{{ reason_id }}">{{ action.reason }}</span>{% endif %}
+    </form>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if volume.options %}
+  <details class="advanced">
+    <summary class="advanced__summary">Advanced</summary>
+    <div class="advanced__body">
+      {% for option in volume.options %}
+      {% if option.name == "remove_hiberfile" %}
+      <div class="option option--guarded">
+        <button type="button"
+                class="btn btn--danger"
+                data-confirm-trigger
+                aria-controls="confirm-{{ volume.id }}"
+                aria-expanded="false"
+                data-label="{{ volume.label }}"
+                {%- if not option.enabled %} disabled{% endif %}>Remove hiberfile&hellip;</button>
+        {% if option.reason %}<p class="reason">{{ option.reason }}</p>{% endif %}
+
+        <div id="confirm-{{ volume.id }}"
+             class="confirm"
+             data-confirm-form
+             data-label="{{ volume.label }}"
+             role="group"
+             aria-labelledby="confirm-{{ volume.id }}-warning"
+             hidden>
+          <p class="confirm__warning" id="confirm-{{ volume.id }}-warning">
+            Removing the hibernation file on {{ volume.label }} discards Windows
+            hibernation state and any unsaved session. This cannot be undone.
+          </p>
+          <form class="confirm__form"
+                method="post"
+                action="/api/v1/volumes/{{ volume.id }}/mount"
+                hx-post="/api/v1/volumes/{{ volume.id }}/mount"
+                hx-headers='{"X-NTFSMNT":"1"}'
+                hx-target="#detail"
+                hx-swap="outerHTML">
+            <input type="hidden" name="label" value="{{ volume.label }}">
+            {% if volume.size is not none %}<input type="hidden" name="size" value="{{ volume.size }}">{% endif %}
+            <label class="check" for="confirm-{{ volume.id }}-hiberfile">
+              <input type="checkbox"
+                     id="confirm-{{ volume.id }}-hiberfile"
+                     name="remove_hiberfile"
+                     value="true"
+                     checked>
+              Remove the hibernation file
+            </label>
+            <label class="confirm__prompt" for="confirm-{{ volume.id }}-input">Type {{ volume.label }} to confirm</label>
+            <input id="confirm-{{ volume.id }}-input"
+                   class="confirm__input"
+                   type="text"
+                   name="confirm"
+                   autocomplete="off"
+                   spellcheck="false"
+                   autocapitalize="off"
+                   data-confirm-input>
+            <code class="cmd">sudo ntfsmnt mount {{ volume.label }} --remove-hiberfile --confirmed</code>
+            <div class="confirm__actions">
+              <button type="submit" class="btn btn--danger" data-confirm-submit disabled>Confirm</button>
+              <button type="button" class="link" data-confirm-cancel>Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      {% elif option.name == "recover" %}
+      <form class="option option--recover"
+            method="post"
+            action="/api/v1/volumes/{{ volume.id }}/mount"
+            hx-post="/api/v1/volumes/{{ volume.id }}/mount"
+            hx-headers='{"X-NTFSMNT":"1"}'
+            hx-target="#detail"
+            hx-swap="outerHTML">
+        <input type="hidden" name="label" value="{{ volume.label }}">
+        {% if volume.size is not none %}<input type="hidden" name="size" value="{{ volume.size }}">{% endif %}
+        <label class="check" for="recover-{{ volume.id }}">
+          <input type="checkbox"
+                 id="recover-{{ volume.id }}"
+                 name="recover"
+                 value="true"
+                 {%- if not option.enabled %} disabled{% endif %}>
+          Recover the journal on an unclean volume
+        </label>
+        <button type="submit" class="btn"{% if not option.enabled %} disabled{% endif %}>Mount with recovery</button>
+        {% if option.reason %}<span class="reason">{{ option.reason }}</span>{% endif %}
+      </form>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </details>
+  {% endif %}
+
+  {% include "_activity.html" %}
+  {% endif %}
+</section>

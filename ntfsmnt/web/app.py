@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
                                StreamingResponse)
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from ntfsmnt.web.config import Settings, cookie_matches, cookie_value
 from ntfsmnt.web.events import EventBus
@@ -19,6 +20,8 @@ from ntfsmnt.web.schemas import (ActionRequest, ActivityModel, ErrorResponse,
 from ntfsmnt.web.service import Service
 
 PAGE_DIR = Path(__file__).parent / "page"
+
+templates = Jinja2Templates(directory=PAGE_DIR)
 
 logger = logging.getLogger("ntfsmnt.web")
 
@@ -74,6 +77,28 @@ async def reconcile_once(service, bus: EventBus, last_json: str) -> str:
 def _state_key(payload: dict) -> str:
     stable = {key: value for key, value in payload.items() if key != "generated_at"}
     return json.dumps(stable, sort_keys=True)
+
+
+async def _state_for(svc: Service) -> StateModel:
+    return state_model(await asyncio.to_thread(svc.snapshot))
+
+
+async def _detail_response(request: Request, svc: Service, selected: str,
+                           error=None):
+    return templates.TemplateResponse(
+        request, "_detail.html",
+        {"state": await _state_for(svc), "selected": selected,
+         "activity": svc.activity(), "error": error},
+    )
+
+
+async def _region_response(request: Request, svc: Service, state: StateModel,
+                           selected: str):
+    return templates.TemplateResponse(
+        request, "_region.html",
+        {"state": state, "selected": selected,
+         "activity": svc.activity(), "error": None},
+    )
 
 
 def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI:
@@ -136,7 +161,20 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
                 status_code=401,
             )
         await asyncio.to_thread(svc.refresh_doctor)
-        return HTMLResponse("<h1>ntfsmnt</h1>")
+        snap = await _state_for(svc)
+        return templates.TemplateResponse(
+            request, "index.html",
+            {"state": snap,
+             "selected": snap.volumes[0].id if snap.volumes else None,
+             "activity": svc.activity(), "error": None},
+        )
+
+    @app.get("/partials/volumes", response_class=HTMLResponse)
+    async def partial(request: Request, selected: str | None = None):
+        require_session(settings, request)
+        snap = await _state_for(svc)
+        chosen = selected or (snap.volumes[0].id if snap.volumes else "")
+        return await _region_response(request, svc, snap, chosen)
 
     @app.get("/api/v1/state", response_model=StateModel)
     async def state(request: Request):
@@ -195,6 +233,14 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
             app.state.last_state_json = await _publish_state(svc, request.app)
         except Exception:
             logger.exception("failed to publish state after %s on %s", action, volume_id)
+        if request.headers.get("hx-request"):
+            # Always 200 for htmx so the fragment swaps and any error renders
+            # inline; JSON clients still receive the real status below.
+            return await _detail_response(
+                request, svc,
+                result.volume.id if result.volume else volume_id,
+                error=result.error,
+            )
         if result.ok:
             return result_model(result)
         error = result.error

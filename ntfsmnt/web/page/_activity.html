@@ -1,0 +1,24 @@
+<section class="activity" aria-labelledby="activity-heading">
+  <h3 class="activity__heading" id="activity-heading">Activity</h3>
+  {% if activity %}
+  <ol class="log">
+    {% for entry in activity %}
+    <li class="log__row{% if not entry.ok %} is-failure{% endif %}">
+      <time class="log__time" datetime="{{ entry.at }}">{{ entry.at }}</time>
+      <span class="log__action">{{ entry.action }}</span>
+      <span class="log__volume">{{ entry.volume }}</span>
+      <span class="log__outcome">{{ "ok" if entry.ok else "failed" }}</span>
+      <span class="log__summary">{{ entry.summary }}</span>
+      {% if entry.detail %}
+      <details class="log__detail">
+        <summary>Details</summary>
+        <pre>{{ entry.detail }}</pre>
+      </details>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty empty--quiet">No activity for this volume yet.</p>
+  {% endif %}
+</section>

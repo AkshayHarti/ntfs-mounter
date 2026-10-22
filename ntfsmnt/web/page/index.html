@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ntfsmnt</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead__identity">
+      <h1 class="wordmark">ntfsmnt</h1>
+      {% if state.host.root and not state.host.read_only %}
+      <span class="badge badge--root">root</span>
+      {% else %}
+      <span class="badge badge--readonly">read-only</span>
+      {% endif %}
+    </div>
+    <p class="doctor-line doctor-line--{{ state.doctor.status }}">
+      {%- if state.doctor.status == "ok" -%}
+      doctor &check;
+      {%- else -%}
+      {%- set count = state.doctor.findings | length -%}
+      doctor: {{ count }} {{ state.doctor.status }}{{ "" if count == 1 else "s" }}
+      {%- endif -%}
+    </p>
+    <span class="live" id="live" data-live="connecting">live</span>
+  </header>
+
+  {% if state.host.read_only %}
+  <section class="banner banner--warning" role="status">
+    <p>Read-only mode &mdash; restart with <code>sudo ntfsmnt web</code> to enable actions.</p>
+  </section>
+  {% endif %}
+
+  {% if state.doctor.findings %}
+  <section class="banner banner--{{ 'blocker' if state.doctor.status == 'blocker' else 'warning' }}"
+           role="{{ 'alert' if state.doctor.status == 'blocker' else 'status' }}"
+           aria-label="Host checks">
+    <ul class="findings">
+      {% for finding in state.doctor.findings %}
+      <li class="finding">
+        <strong class="finding__check">{{ finding.check }}</strong>
+        <span class="finding__message">{{ finding.message }}</span>
+        {% if finding.fix %}
+        <span class="finding__fix">{{ finding.fix }}</span>
+        <button type="button" class="copy" data-copy="{{ finding.fix }}">Copy</button>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <div id="alert" role="alert" class="alert">{% if error %}<p class="alert__message">{{ error.message }}</p>{% if error.next_step %}<p class="alert__next">{{ error.next_step }}</p>{% endif %}{% endif %}</div>
+
+  <main id="app">
+    {% include "_region.html" %}
+  </main>
+
+  <div id="activity-live" aria-live="polite" class="sr-only"></div>
+
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
