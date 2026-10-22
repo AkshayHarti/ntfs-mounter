@@ -58,7 +58,12 @@ class EventBus:
             frame = format_frame(event_id, event, data)
             self._history.append(frame)
         if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._fanout, frame)
+            try:
+                self._loop.call_soon_threadsafe(self._fanout, frame)
+            except RuntimeError:
+                # The loop closed between the check and the hop (shutdown);
+                # the frame is already in the replay ring, so drop the push.
+                pass
         else:
             self._fanout(frame)
         return event_id

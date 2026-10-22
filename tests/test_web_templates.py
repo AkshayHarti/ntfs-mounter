@@ -60,3 +60,26 @@ def test_index_has_live_regions_and_script():
     assert 'aria-live="polite"' in html
     assert 'role="alert"' in html
     assert "/static/app.js" in html
+
+
+def test_index_has_doctor_targets_without_oob_swap():
+    html = render_index(state())
+    assert html.count('id="doctor-status"') == 1
+    assert html.count('id="doctor-banners"') == 1
+    assert 'class="recheck" href="/"' in html
+    assert "hx-swap-oob" not in html
+
+
+def test_detail_oob_swap_carries_fresh_doctor():
+    html = render_detail(state(), oob=True)
+    assert 'id="doctor-status"' in html
+    assert 'id="doctor-banners" hx-swap-oob="true"' in html
+    assert html.count('hx-swap-oob="true"') == 2
+    assert "doctor &check;" in html
+    assert "Re-check" in html
+
+
+def test_detail_without_oob_has_no_doctor_fragment():
+    html = render_detail(state())
+    assert 'id="doctor-status"' not in html
+    assert "hx-swap-oob" not in html

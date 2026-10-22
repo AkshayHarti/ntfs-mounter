@@ -16,14 +16,7 @@
       <span class="badge badge--readonly">read-only</span>
       {% endif %}
     </div>
-    <p class="doctor-line doctor-line--{{ state.doctor.status }}">
-      {%- if state.doctor.status == "ok" -%}
-      doctor &check;
-      {%- else -%}
-      {%- set count = state.doctor.findings | length -%}
-      doctor: {{ count }} {{ state.doctor.status }}{{ "" if count == 1 else "s" }}
-      {%- endif -%}
-    </p>
+    {% include "_doctor_status.html" %}
     <span class="live" id="live" data-live="connecting">live</span>
   </header>
 
@@ -33,24 +26,7 @@
   </section>
   {% endif %}
 
-  {% if state.doctor.findings %}
-  <section class="banner banner--{{ 'blocker' if state.doctor.status == 'blocker' else 'warning' }}"
-           role="{{ 'alert' if state.doctor.status == 'blocker' else 'status' }}"
-           aria-label="Host checks">
-    <ul class="findings">
-      {% for finding in state.doctor.findings %}
-      <li class="finding">
-        <strong class="finding__check">{{ finding.check }}</strong>
-        <span class="finding__message">{{ finding.message }}</span>
-        {% if finding.fix %}
-        <span class="finding__fix">{{ finding.fix }}</span>
-        <button type="button" class="copy" data-copy="{{ finding.fix }}">Copy</button>
-        {% endif %}
-      </li>
-      {% endfor %}
-    </ul>
-  </section>
-  {% endif %}
+  {% include "_doctor_banners.html" %}
 
   <div id="alert" role="alert" class="alert">{% if error %}<p class="alert__message">{{ error.message }}</p>{% if error.next_step %}<p class="alert__next">{{ error.next_step }}</p>{% endif %}{% endif %}</div>
 

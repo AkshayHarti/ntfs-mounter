@@ -12,8 +12,8 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 
 ## Commands
 
-- Install deps: `uv sync`
-- Test: `uv run pytest -q` (153 tests)
+- Install deps: `uv sync` (add `--extra web` for the browser UI and its tests)
+- Test: `uv run pytest -q` (252 tests; the web tests skip without the extra)
 - Manual acceptance: `tests/manual/acceptance.md` (real hardware, root, Full
   Disk Access terminal)
 - Build/run: `uv run ntfsmnt ...`
@@ -35,9 +35,19 @@ ntfsmnt/
   unmounter.py     safe unmount, SIGTERM fallback, eject
   privileged.py    single privilege-escalation path: sudo re-exec via need_root
   models.py        Device dataclass
+  web/
+    app.py         FastAPI routes, auth boundary, middleware, SSE stream
+    service.py     snapshots, doctor refresh, mount/unmount/eject orchestration
+    events.py      EventBus (SSE fanout + replay ring) and the activity log
+    config.py      Settings: token, cookie, hosts, origins, owner, port
+    schemas.py     pydantic models for JSON responses and requests
+    models.py      frozen dataclasses shared by service and schemas
+    page/          index.html + fragments, app.css, app.js, vendored htmx
 
 tests/
   test_*.py        unit tests with injected runners
+  web_helpers.py   shared builders for the web tests
+  web_render.py    Jinja template rendering helpers for the web tests
   fixtures/        captured diskutil / mount output
   manual/
     acceptance.md  human acceptance procedure (HD1 only)
@@ -63,6 +73,18 @@ tests/
 - `privileged.py` — the only root-escalation path; `os.execvp` through `sudo`.
 - `cli.py` — ties it together; resolves volume *before* privilege escalation,
   confirms destructive flags *before* escalation.
+- `web/app.py` — the HTTP surface: token→cookie exchange, the session/`X-NTFSMNT`/
+  Origin boundary, state and action routes, the SSE stream, and the loopback
+  host plus response-header middleware.
+- `web/service.py` — takes the same snapshot the CLI prints, decides which
+  actions are enabled with the same predicates, and runs the CLI's
+  `mounter`/`unmounter` calls under a single operation lock.
+- `web/events.py` — in-process SSE bus with a 100-frame replay ring and the
+  bounded activity log; publish is safe from worker threads.
+- `web/config.py` — launch token, session cookie, allowed hosts/origins, the
+  captured owner ids, and the read-only decision.
+- `web/schemas.py` / `web/models.py` — the JSON contract; the service produces
+  dataclasses and `schemas` validates/serializes them.
 
 ## Non-negotiable safety invariants
 
@@ -109,6 +131,33 @@ These are hard requirements. Do not weaken them in any change.
 
 When changing `mounter.py` or `unmounter.py`, first verify the failure-path
 sequence still restores the read-only mount and does not add a `SIGKILL`.
+
+## Web layer invariants
+
+The browser UI (`sudo ntfsmnt web`) adds an HTTP boundary; it never bypasses the
+CLI rules above. Do not weaken these either.
+
+1. **Token → cookie, once.** The launch token arrives in the URL, is compared in
+   constant time, and is exchanged for an `HttpOnly`, `SameSite=Strict` session
+   cookie via a 303. Routes authenticate the cookie, never the URL.
+2. **Every mutation needs `X-NTFSMNT: 1` and an allowed `Origin`.** htmx and
+   the JSON client both send it; a cross-site form cannot. A request with a
+   missing or foreign `Origin` is refused before any action code runs.
+3. **Loopback `Host` only.** A request whose `Host` is not in the allow-list
+   gets 421, so DNS rebinding cannot reach the session cookie.
+4. **One operation at a time.** Every action holds a single non-blocking lock;
+   a second request is `409 operation_in_progress`. The reconcile tick skips
+   publishing while the lock is held, and re-checks it after the snapshot.
+5. **Doctor freshness.** The doctor result is refreshed on page load, on
+   Re-check, and after a failed action — and the startup check runs before the
+   first request. It is never refreshed on the 5 s reconcile tick, and every
+   refresh publishes a `doctor` event.
+6. **Owner ids come from `SUDO_UID`/`SUDO_GID`** (or `--owner`), captured before
+   the mount; the mount-point ownership check still uses the invoking user, not
+   root.
+7. **Read-only without root.** Without root (or without owner ids) every
+   mutation is refused with a structured 403; state remains readable and the
+   page says why. Nothing re-execs `sudo` on the user's behalf.
 
 ## Conventions
 

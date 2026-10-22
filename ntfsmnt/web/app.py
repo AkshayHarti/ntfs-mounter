@@ -103,6 +103,10 @@ async def reconcile_once(service, bus: EventBus, last_json: str) -> str:
     if service.busy:
         return last_json
     snap = await asyncio.to_thread(service.snapshot)
+    # The snapshot ran off-loop; an action may have taken the lock while it
+    # did, so a state taken mid-operation must not be broadcast.
+    if service.busy:
+        return last_json
     payload = state_model(snap).model_dump(mode="json")
     current = _state_key(payload)
     if current != last_json:
@@ -121,11 +125,11 @@ async def _state_for(svc: Service) -> StateModel:
 
 
 async def _detail_response(request: Request, svc: Service, selected: str,
-                           error=None):
+                           error=None, *, oob: bool = False):
     return templates.TemplateResponse(
         request, "_detail.html",
         {"state": await _state_for(svc), "selected": selected,
-         "activity": svc.activity(), "error": error},
+         "activity": svc.activity(), "error": error, "oob": oob},
     )
 
 
@@ -134,7 +138,7 @@ async def _region_response(request: Request, svc: Service, state: StateModel,
     return templates.TemplateResponse(
         request, "_region.html",
         {"state": state, "selected": selected,
-         "activity": svc.activity(), "error": None},
+         "activity": svc.activity(), "error": None, "oob": False},
     )
 
 
@@ -145,6 +149,12 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
     async def lifespan(app: FastAPI):
         svc.events.bind(asyncio.get_running_loop())
         app.state.last_state_json = ""
+        try:
+            # The initial doctor is "ok" until a check runs; refresh it before
+            # the first request so JSON clients never see a stale pass.
+            await asyncio.to_thread(svc.refresh_doctor)
+        except Exception:
+            logger.exception("startup doctor check failed")
 
         async def reconcile_loop():
             while True:
@@ -179,11 +189,24 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
             return _error(421, "forbidden_host", "This server only answers on loopback.")
         return await call_next(request)
 
+    # Declared last so it wraps host_guard: even a rejected host gets headers.
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+        return response
+
     @app.get("/", response_class=HTMLResponse)
     async def page(request: Request, token: str | None = None):
         if token is not None:
             if not hmac.compare_digest(token.encode(), settings.token.encode()):
-                return _error(401, "unauthorized", "Invalid launch token.")
+                return HTMLResponse(
+                    "<p>ntfsmnt: invalid launch token &mdash; relaunch with "
+                    "<code>sudo ntfsmnt web</code>.</p>",
+                    status_code=401,
+                )
             response = RedirectResponse("/", status_code=303)
             response.set_cookie(
                 settings.cookie_name, cookie_value(settings.token),
@@ -203,7 +226,7 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
             request, "index.html",
             {"state": snap,
              "selected": snap.volumes[0].id if snap.volumes else None,
-             "activity": svc.activity(), "error": None},
+             "activity": svc.activity(), "error": None, "oob": False},
         )
 
     @app.get("/partials/volumes", response_class=HTMLResponse)
@@ -274,6 +297,13 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
         except Exception:
             logger.exception("action %s on %s failed", action, volume_id)
             return _error(500, "internal", "Unexpected error; see the server log.")
+        if not result.ok:
+            # Spec §8: a failure re-checks the host. Off-loop, and never fatal
+            # to the response the user is waiting for.
+            try:
+                await asyncio.to_thread(svc.refresh_doctor)
+            except Exception:
+                logger.exception("doctor check after failed %s failed", action)
         try:
             app.state.last_state_json = await _publish_state(svc, request.app)
         except Exception:
@@ -284,7 +314,7 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
             return await _detail_response(
                 request, svc,
                 result.volume.id if result.volume else volume_id,
-                error=result.error,
+                error=result.error, oob=not result.ok,
             )
         if result.ok:
             return result_model(result)

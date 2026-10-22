@@ -261,9 +261,11 @@ task report; screenshots are not needed.
 
 ## What unit tests do not cover, and why
 
-The 139 unit tests inject `run`, `mounts`, `sleep`, and `probe`, so they verify
-command sequences and messages but never touch a device. These paths are
-therefore only exercised by hand, and this run does not exercise them:
+The 252 unit tests inject `run`, `mounts`, `sleep`, and `probe`, so they verify
+command sequences and messages but never touch a device. The web layer adds
+session-cookie, `X-NTFSMNT`, and `Origin` checks on top of the CLI safety model;
+it never bypasses it. These paths are therefore only exercised by hand, and
+this run does not exercise them:
 
 - **Hibernated volume refusal and `--remove-hiberfile`.** Producing the input
   needs a volume hibernated by Windows Fast Startup. HD1 holds live data;

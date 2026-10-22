@@ -100,6 +100,7 @@ class Service:
             else "warning" if findings else "ok"
         )
         self._doctor = DoctorStatus(status=status, checked_at=iso(self._clock()), findings=findings)
+        self.events.publish("doctor", asdict(self._doctor))
         return self._doctor
 
     def _default_doctor_env(self) -> Env:

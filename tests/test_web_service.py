@@ -194,6 +194,23 @@ def test_guarded_mount_requires_exact_label(monkeypatch):
         assert result.error.status == 400
 
 
+def test_confirmed_remove_hiberfile_forwards_flag(monkeypatch):
+    calls = {}
+
+    def fake_mount(volume, **kw):
+        calls.update(kw)
+        from ntfsmnt.mounter import MountResult
+        return MountResult(volume=volume, mount_point="/Volumes/HD1", pid=4242)
+
+    monkeypatch.setattr(svc_mod, "mount_volume", fake_mount)
+    svc = make_service([make_volume()])
+    result = svc.mount("UUID-1", label="HD1", remove_hiberfile=True, confirm="HD1")
+    assert result.ok is True
+    assert calls["remove_hiberfile"] is True
+    assert calls["recover"] is False
+    assert calls["uid"] == 501 and calls["gid"] == 20
+
+
 def test_hibernated_failure_offers_guarded_mount(monkeypatch):
     def fail(*a, **k):
         from ntfsmnt.mounter import MountFailed

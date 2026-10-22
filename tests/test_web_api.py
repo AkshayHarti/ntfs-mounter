@@ -11,7 +11,7 @@ from ntfsmnt.web.service import Service
 from tests.web_helpers import FakeRun, make_settings, make_volume
 
 
-def client(*, read_only=False):
+def _service(*, read_only=False):
     settings = make_settings(read_only=read_only)
     service = Service(
         settings,
@@ -21,6 +21,11 @@ def client(*, read_only=False):
         doctor_env=Env(lambda p: True, lambda a: (0, ""), 0,
                        lambda p: "libfuse-t", lambda: None),
     )
+    return settings, service
+
+
+def client(*, read_only=False):
+    settings, service = _service(read_only=read_only)
     return TestClient(create_app(settings, service=service)), service
 
 
@@ -40,7 +45,10 @@ def test_token_exchange_sets_cookie_and_redirects():
 
 def test_wrong_token_is_401():
     c, _ = client()
-    assert c.get("/?token=nope", follow_redirects=False).status_code == 401
+    r = c.get("/?token=nope", follow_redirects=False)
+    assert r.status_code == 401
+    assert r.headers["content-type"].startswith("text/html")
+    assert "invalid launch token" in r.text
 
 
 def test_foreign_host_is_421():
@@ -213,3 +221,55 @@ def test_partial_without_selection_picks_first_volume():
     assert r.status_code == 200
     assert 'data-selected="true"' in r.text
     assert "UUID-1" in r.text
+
+
+def test_security_headers_on_every_response():
+    c, _ = client()
+    c.get("/?token=tok")
+    ok = c.get("/api/v1/state")
+    rejected = c.get("/api/v1/state", headers={"host": "evil.test"})
+    for response in (ok, rejected):
+        assert response.headers["x-frame-options"] == "DENY"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["content-security-policy"] == "frame-ancestors 'none'"
+
+
+def test_empty_label_is_422():
+    c, _ = client()
+    r = c.post("/api/v1/volumes/UUID-1/mount", json={"label": ""}, headers=auth(c))
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "invalid_request"
+
+
+def test_failed_htmx_action_refreshes_doctor_with_oob_fragment(monkeypatch):
+    from ntfsmnt.mounter import MountFailed
+    import ntfsmnt.web.service as svc_mod
+
+    def fail(*a, **k):
+        raise MountFailed(
+            "The volume is hibernated. Re-run with --remove-hiberfile. "
+            "Apple's read-only mount was restored."
+        )
+
+    monkeypatch.setattr(svc_mod, "mount_volume", fail)
+    c, svc = client()
+    headers = auth(c)
+    refreshes = []
+    real_refresh = svc.refresh_doctor
+    monkeypatch.setattr(svc, "refresh_doctor", lambda: refreshes.append(1) or real_refresh())
+    refreshes.clear()  # ignore the page-load check inside auth()
+
+    r = c.post("/api/v1/volumes/UUID-1/mount",
+               data={"label": "HD1"}, headers={**headers, "HX-Request": "true"})
+    assert r.status_code == 200
+    assert refreshes
+    assert 'hx-swap-oob="true"' in r.text
+    assert 'id="doctor-status"' in r.text
+    assert "hibernated" in r.text
+
+
+def test_startup_publishes_doctor_event():
+    settings, svc = _service()
+    with TestClient(create_app(settings, service=svc)):
+        frames = svc.events.replay(0)
+    assert any("\nevent: doctor\n" in f for f in frames)

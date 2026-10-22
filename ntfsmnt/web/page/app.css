@@ -136,6 +136,14 @@ a {
   color: var(--red);
 }
 
+.recheck {
+  color: inherit;
+  font-size: 0.8125rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+
 .live {
   margin-left: auto;
   color: var(--muted);
