@@ -42,20 +42,26 @@ class EventBus:
         self._subs: set[asyncio.Queue[str]] = set()
         self._history: deque[str] = deque(maxlen=limit)
         self._next = 0
+        self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
 
     def bind(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
 
     def publish(self, event: str, data: Any) -> int:
-        self._next += 1
-        frame = format_frame(self._next, event, data)
-        self._history.append(frame)
+        # Worker threads call publish; allocate the id and record the frame
+        # atomically so ids and replay order cannot diverge. Dispatch happens
+        # after the lock is released.
+        with self._lock:
+            self._next += 1
+            event_id = self._next
+            frame = format_frame(event_id, event, data)
+            self._history.append(frame)
         if self._loop is not None:
             self._loop.call_soon_threadsafe(self._fanout, frame)
         else:
             self._fanout(frame)
-        return self._next
+        return event_id
 
     def _fanout(self, frame: str) -> None:
         for queue in list(self._subs):
@@ -77,9 +83,13 @@ class EventBus:
         self._subs.discard(queue)
 
     def replay(self, last_id: int) -> list[str]:
+        # Snapshot under the lock: a worker-thread publish mutating the deque
+        # while the loop iterates it would raise RuntimeError.
+        with self._lock:
+            frames = list(self._history)
         if last_id <= 0:
-            return list(self._history)
-        return [f for f in self._history if _frame_id(f) > last_id]
+            return frames
+        return [f for f in frames if _frame_id(f) > last_id]
 
     def has_subscribers(self) -> bool:
         return bool(self._subs)

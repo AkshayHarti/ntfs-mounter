@@ -1,5 +1,7 @@
 import asyncio
 import json
+import sys
+import threading
 
 from ntfsmnt.web.events import ActivityLog, EventBus
 from ntfsmnt.web.models import ActionError, ActionResult
@@ -38,6 +40,50 @@ def test_bus_ring_keeps_last_hundred():
         bus.publish("state", {"i": i})
     assert len(bus.replay(0)) == 100
     assert "id: 105" in bus.replay(0)[-1]
+
+
+def test_bus_publish_from_worker_thread_hops_through_loop():
+    async def go():
+        bus = EventBus()
+        queue = bus.subscribe()
+        bus.bind(asyncio.get_running_loop())
+        worker = threading.Thread(
+            target=lambda: bus.publish("state", {"thread": True})
+        )
+        worker.start()
+        worker.join()
+        # The loop cannot run callbacks while this coroutine blocks in
+        # join(), so a direct fan-out from the worker thread would already
+        # have filled the queue here.
+        assert queue.qsize() == 0
+        frame = await asyncio.wait_for(queue.get(), 0.5)
+        assert frame == 'id: 1\nevent: state\ndata: {"thread": true}\n\n'
+        assert bus.replay(0) == [frame]
+
+    asyncio.run(go())
+
+
+def test_concurrent_publish_keeps_ids_unique_and_in_order():
+    bus = EventBus(limit=1000)
+    previous = sys.getswitchinterval()
+    # Force frequent thread switches so the id allocation race would show.
+    sys.setswitchinterval(1e-6)
+
+    def publish_many():
+        for i in range(100):
+            bus.publish("state", {"i": i})
+
+    workers = [threading.Thread(target=publish_many) for _ in range(8)]
+    try:
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+    finally:
+        sys.setswitchinterval(previous)
+    frames = bus.replay(0)
+    ids = [int(f.split("\n", 1)[0].split(": ", 1)[1]) for f in frames]
+    assert ids == list(range(1, 801))
 
 
 def test_subscriber_receives_published_frame():
