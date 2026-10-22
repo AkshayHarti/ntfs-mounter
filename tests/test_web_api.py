@@ -116,6 +116,22 @@ def test_mount_success_returns_result_and_volume(monkeypatch):
     assert data["volume"]["label"] == "HD1"
 
 
+def test_htmx_form_post_mounts_and_returns_detail_fragment(monkeypatch):
+    from ntfsmnt.mounter import MountResult
+    import ntfsmnt.web.service as svc_mod
+    monkeypatch.setattr(
+        svc_mod, "mount_volume",
+        lambda volume, **kw: MountResult(volume, "/Volumes/HD1", 4242))
+    c, _ = client()
+    r = c.post("/api/v1/volumes/UUID-1/mount",
+               data={"label": "HD1", "size": "1000000000"},
+               headers={**auth(c), "HX-Request": "true"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    assert 'id="detail"' in r.text
+    assert "HD1" in r.text
+
+
 def test_second_action_is_409_while_lock_held():
     c, svc = client()
     headers = auth(c)

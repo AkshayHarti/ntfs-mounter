@@ -5,6 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
+from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
@@ -44,6 +45,42 @@ def require_mutation(settings: Settings, request: Request) -> None:
         raise HTTPException(status_code=403, detail="missing X-NTFSMNT header")
     if request.headers.get("origin") not in settings.allowed_origins:
         raise HTTPException(status_code=403, detail="bad origin")
+
+
+_FORM_TRUE = {"on", "true", "1", "yes"}
+
+
+def _form_bool(raw: str | None) -> bool:
+    return (raw or "").strip().lower() in _FORM_TRUE
+
+
+async def _action_body(request: Request) -> ActionRequest:
+    """Decode a JSON or browser form-encoded action body.
+
+    htmx 2.x always serializes a form as FormData, which httpx and browsers
+    send as application/x-www-form-urlencoded when no files are involved, so
+    the endpoint must accept both encodings. Anything else raises ValueError
+    and is answered with the JSON error envelope, never a 500.
+
+    The urlencoded branch parses with the stdlib: Starlette gates
+    ``request.form()`` behind python-multipart, which this app does not ship.
+    """
+    content_type = request.headers.get("content-type", "")
+    content_type = content_type.split(";", 1)[0].strip().lower()
+    if content_type == "application/json":
+        return ActionRequest.model_validate(await request.json())
+    if content_type == "application/x-www-form-urlencoded":
+        raw = (await request.body()).decode("utf-8", "replace")
+        form = dict(parse_qsl(raw, keep_blank_values=True))
+        size = form.get("size")
+        return ActionRequest(
+            label=form.get("label", ""),
+            size=int(size) if size else None,
+            recover=_form_bool(form.get("recover")),
+            remove_hiberfile=_form_bool(form.get("remove_hiberfile")),
+            confirm=form.get("confirm") or None,
+        )
+    raise ValueError(f"unsupported content type {content_type!r}")
 
 
 async def stream_frames(
@@ -216,7 +253,7 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
     }
 
     @app.post("/api/v1/volumes/{volume_id}/{action}")
-    async def act(volume_id: str, action: str, body: ActionRequest, request: Request):
+    async def act(volume_id: str, action: str, request: Request):
         try:
             require_mutation(settings, request)
         except HTTPException as exc:
@@ -224,6 +261,13 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
             return _error(exc.status_code, code, exc.detail)
         if action not in ACTIONS:
             return _error(404, "not_found", f"Unknown action {action!r}.")
+        try:
+            body = await _action_body(request)
+        except ValueError:
+            logger.info("unreadable action body for %s on %s", action, volume_id)
+            return _error(422, "invalid_request",
+                          "Could not read the action request.",
+                          "Send a JSON or form-encoded body.")
         try:
             result = await asyncio.to_thread(ACTIONS[action], volume_id, body)
         except Exception:
