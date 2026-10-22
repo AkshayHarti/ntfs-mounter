@@ -1,13 +1,18 @@
 import asyncio
 import hmac
+import json
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
+                               StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 
 from ntfsmnt.web.config import Settings, cookie_matches, cookie_value
+from ntfsmnt.web.events import EventBus
 from ntfsmnt.web.schemas import (ActionRequest, ActivityModel, ErrorResponse,
                                  StateModel, activity_model, error_response,
                                  result_model, state_model)
@@ -38,9 +43,62 @@ def require_mutation(settings: Settings, request: Request) -> None:
         raise HTTPException(status_code=403, detail="bad origin")
 
 
+async def stream_frames(
+    bus: EventBus, last_event_id: int, ping_interval: float = 20.0
+) -> AsyncIterator[str]:
+    queue = bus.subscribe()
+    try:
+        for frame in bus.replay(last_event_id):
+            yield frame
+        while True:
+            try:
+                yield await asyncio.wait_for(queue.get(), ping_interval)
+            except asyncio.TimeoutError:
+                yield f"event: ping\ndata: {json.dumps({})}\n\n"
+    finally:
+        bus.unsubscribe(queue)
+
+
+async def reconcile_once(service, bus: EventBus, last_json: str) -> str:
+    if service.busy:
+        return last_json
+    snap = await asyncio.to_thread(service.snapshot)
+    payload = state_model(snap).model_dump(mode="json")
+    current = json.dumps(payload, sort_keys=True)
+    if current != last_json:
+        bus.publish("state", payload)
+        return current
+    return last_json
+
+
 def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI:
     svc = service or Service(settings)
-    app = FastAPI(title="ntfsmnt web", docs_url=None, redoc_url=None)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        svc.events.bind(asyncio.get_running_loop())
+        app.state.last_state_json = ""
+
+        async def reconcile_loop():
+            while True:
+                await asyncio.sleep(5)
+                if svc.events.has_subscribers():
+                    app.state.last_state_json = await reconcile_once(
+                        svc, svc.events, app.state.last_state_json)
+
+        task = asyncio.create_task(reconcile_loop())
+        try:
+            yield
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    app = FastAPI(title="ntfsmnt web", docs_url=None, redoc_url=None,
+                  lifespan=lifespan)
+    app.state.last_state_json = ""
 
     @app.middleware("http")
     async def host_guard(request: Request, call_next):
@@ -79,6 +137,24 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
         require_session(settings, request)
         return activity_model(svc.activity())
 
+    @app.get("/api/v1/events")
+    async def events(request: Request):
+        require_session(settings, request)
+        header = request.headers.get("last-event-id", "0")
+        last = int(header) if header.isdigit() else 0
+        # A new connection gets the current state immediately; the reconcile
+        # tick only runs while at least one subscriber is attached.
+        try:
+            app.state.last_state_json = await reconcile_once(
+                svc, svc.events, app.state.last_state_json)
+        except Exception:
+            logger.exception("failed to publish initial SSE state")
+        return StreamingResponse(
+            stream_frames(svc.events, last),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     ACTIONS = {
         "mount": lambda target, body: svc.mount(
             target, label=body.label, size=body.size, recover=body.recover,
@@ -104,7 +180,7 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
             logger.exception("action %s on %s failed", action, volume_id)
             return _error(500, "internal", "Unexpected error; see the server log.")
         try:
-            await _publish_state(svc)
+            app.state.last_state_json = await _publish_state(svc)
         except Exception:
             logger.exception("failed to publish state after %s on %s", action, volume_id)
         if result.ok:
@@ -122,6 +198,8 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
     return app
 
 
-async def _publish_state(svc: Service) -> None:
+async def _publish_state(svc: Service) -> str:
     snap = await asyncio.to_thread(svc.snapshot)
-    svc.events.publish("state", state_model(snap).model_dump(mode="json"))
+    payload = state_model(snap).model_dump(mode="json")
+    svc.events.publish("state", payload)
+    return json.dumps(payload, sort_keys=True)
