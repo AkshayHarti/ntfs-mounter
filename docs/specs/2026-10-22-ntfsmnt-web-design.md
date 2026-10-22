@@ -216,15 +216,15 @@ CLI uses, so the page never re-derives policy: `actions` are the buttons,
 
 ### Actions
 
-Request body (all fields optional except where guarded):
+Request body (`label` required; the rest optional except where guarded):
 
 ```json
-{"label": "HD1", "recover": false, "remove_hiberfile": false, "confirm": "HD1"}
+{"label": "HD1", "size": 1000204886016, "recover": false, "remove_hiberfile": false, "confirm": "HD1"}
 ```
 
-`label` is required on every action: it is the identity check the user implied
-by clicking that row, and the server refuses a mismatch rather than trusting the
-path.
+`label` is required on every action and `size` is optional: together they are the
+identity check the user implied by clicking that row, and the server refuses a
+mismatch rather than trusting the path.
 
 Lifecycle for every action:
 
