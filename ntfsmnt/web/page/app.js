@@ -225,8 +225,10 @@
      disabled and tells the release path what to restore. */
   let operationBusy = false;
 
-  /* The activity entry already announced, so a re-render stays quiet. */
-  let announcedActivity = null;
+  /* The newest activity id announced so far. History that predates the page
+     load is never spoken; only entries newer than every one already shown
+     are. Ids are monotonic, so this also refuses reverse-order announces. */
+  let highestAnnounced = 0;
 
   function activitySection() {
     return document.querySelector("[data-activity-for]");
@@ -268,6 +270,22 @@
     }
   }
 
+  /* Monotonic activity ids make "is this new?" a comparison, not a guess. */
+  function activityId(row) {
+    const id = Number.parseInt(row.dataset.activityId, 10);
+    return Number.isFinite(id) && id > 0 ? id : 0;
+  }
+
+  /* A page often loads with history already in the log. That history must
+     not be announced as if an action just happened, so the high-water mark
+     starts above every entry present at load. */
+  function primeAnnouncements() {
+    highestAnnounced = activityRows().reduce(function (highest, row) {
+      const id = activityId(row);
+      return id > highest ? id : highest;
+    }, 0);
+  }
+
   /* Text only: the announced string is assembled from rendered text nodes,
      never from HTML. */
   function announceActivityResult() {
@@ -279,9 +297,14 @@
     });
     if (!row) {
       if (live.textContent !== "") live.textContent = "";
-      announcedActivity = null;
       return;
     }
+
+    /* Only a genuinely new entry speaks; re-renders, selection swaps, and
+       reconcile swaps carrying old entries stay quiet. */
+    const id = activityId(row);
+    if (id <= highestAnnounced) return;
+    highestAnnounced = id;
 
     function textOf(selector) {
       const node = row.querySelector(selector);
@@ -292,14 +315,7 @@
       textOf(".log__action") + " " + textOf(".log__volume") + ": " +
       textOf(".log__outcome") + ".";
     const summary = textOf(".log__summary");
-    const text = summary ? head + " " + summary : head;
-
-    /* The same entry keeps its id across swaps, so a re-render does not
-       re-announce the result the user has already heard. */
-    const key = row.dataset.activityId || text;
-    if (key === announcedActivity) return;
-    announcedActivity = key;
-    live.textContent = text;
+    live.textContent = summary ? head + " " + summary : head;
   }
 
   /* ── Operation notice (one operation at a time) ──────────────────────── */
@@ -735,6 +751,7 @@
   });
 
   applyActivityFilter();
+  primeAnnouncements();
   reconcileOperation();
   connect();
 })();
