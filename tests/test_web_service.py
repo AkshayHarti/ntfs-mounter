@@ -149,28 +149,32 @@ def test_mount_rejects_wrong_size_without_calling_mounter(monkeypatch):
     assert result.error.code == "volume_changed"
 
 
-def test_mount_rejects_unknown_identity():
+def test_mount_rejects_unknown_identity(monkeypatch):
+    monkeypatch.setattr(svc_mod, "mount_volume", lambda *a, **k: pytest.fail("called"))
     svc = make_service([make_volume()])
     result = svc.mount("UUID-404", label="HD1")
     assert result.error.code == "volume_not_found"
     assert result.error.status == 404
 
 
-def test_duplicate_uuid_is_ambiguous():
+def test_duplicate_uuid_is_ambiguous(monkeypatch):
+    monkeypatch.setattr(svc_mod, "mount_volume", lambda *a, **k: pytest.fail("called"))
     svc = make_service([make_volume(), make_volume(identifier="disk5s1")])
     result = svc.mount("UUID-1", label="HD1")
     assert result.error.code == "ambiguous_volume"
     assert result.error.status == 409
 
 
-def test_action_in_read_only_mode_is_forbidden():
+def test_action_in_read_only_mode_is_forbidden(monkeypatch):
+    monkeypatch.setattr(svc_mod, "mount_volume", lambda *a, **k: pytest.fail("called"))
     svc = make_service([make_volume()], read_only=True)
     result = svc.mount("UUID-1", label="HD1")
     assert result.error.code in {"not_root", "owner_unresolved"}
     assert result.error.status == 403
 
 
-def test_action_with_doctor_blocker_is_409():
+def test_action_with_doctor_blocker_is_409(monkeypatch):
+    monkeypatch.setattr(svc_mod, "mount_volume", lambda *a, **k: pytest.fail("called"))
     doc = DoctorStatus(
         "blocker", "now",
         (Finding("blocker", "ntfs-3g", "ntfs-3g missing", "install it"),),
@@ -219,6 +223,7 @@ def test_restore_attempt_is_not_reported_as_restored(monkeypatch):
 
 
 def test_second_action_while_locked_is_refused(monkeypatch):
+    monkeypatch.setattr(svc_mod, "mount_volume", lambda *a, **k: pytest.fail("called"))
     svc = make_service([make_volume()])
     with svc.operation("mount", "HD1"):
         result = svc.mount("UUID-1", label="HD1")
@@ -255,3 +260,70 @@ def test_unmount_reports_restore_failure(monkeypatch):
     assert result.ok is False
     assert result.restored is False
     assert result.error.code == "action_failed"
+
+
+def test_unmount_success_restores_read_only(monkeypatch):
+    monkeypatch.setattr(svc_mod, "unmount_volume", lambda *a, **k: True)
+    rw = make_volume(mounts=[RW], mount_point="/Volumes/HD1")
+    result = make_service([rw]).unmount("UUID-1", label="HD1")
+    assert result.ok is True
+    assert result.restored is True
+    assert result.volume is not None
+
+
+def test_eject_success_returns_no_volume(monkeypatch):
+    monkeypatch.setattr(svc_mod, "eject_volume", lambda *a, **k: None)
+    svc = make_service([make_volume()])
+    result = svc.eject("UUID-1", label="HD1")
+    assert result.ok is True
+    assert result.volume is None
+    assert result.restored is None
+
+
+def test_mount_failure_dirty_maps_to_blocked_dirty(monkeypatch):
+    def fail(*a, **k):
+        from ntfsmnt.mounter import MountFailed
+        raise MountFailed("The volume is dirty. Apple's read-only mount was restored.")
+
+    monkeypatch.setattr(svc_mod, "mount_volume", fail)
+    result = make_service([make_volume()]).mount("UUID-1", label="HD1")
+    assert result.ok is False
+    assert result.restored is True
+    assert result.error.code == "blocked_dirty"
+    assert result.error.status == 422
+
+
+def test_mount_failure_busy_maps_to_busy(monkeypatch):
+    def fail(*a, **k):
+        from ntfsmnt.mounter import MountFailed
+        raise MountFailed("The device is busy.")
+
+    monkeypatch.setattr(svc_mod, "mount_volume", fail)
+    result = make_service([make_volume()]).mount("UUID-1", label="HD1")
+    assert result.ok is False
+    assert result.error.code == "busy"
+    assert result.error.status == 409
+
+
+def test_mount_failure_permission_maps_to_permission_denied(monkeypatch):
+    def fail(*a, **k):
+        from ntfsmnt.mounter import MountFailed
+        raise MountFailed("ntfs-3g: permission denied opening /dev/disk4s1")
+
+    monkeypatch.setattr(svc_mod, "mount_volume", fail)
+    result = make_service([make_volume()]).mount("UUID-1", label="HD1")
+    assert result.ok is False
+    assert result.error.code == "permission_denied"
+    assert result.error.status == 403
+
+
+def test_mount_failure_generic_maps_to_action_failed(monkeypatch):
+    def fail(*a, **k):
+        from ntfsmnt.mounter import MountFailed
+        raise MountFailed("ntfs-3g exited with status 1")
+
+    monkeypatch.setattr(svc_mod, "mount_volume", fail)
+    result = make_service([make_volume()]).mount("UUID-1", label="HD1")
+    assert result.ok is False
+    assert result.error.code == "action_failed"
+    assert result.error.status == 500
