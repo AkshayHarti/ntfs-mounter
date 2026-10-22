@@ -14,20 +14,28 @@
 
   let pendingRefresh = false;
 
+  /* The selection the client wants, independent of the DOM. `null` means
+     "derive it from the rendered .volume-row.is-selected"; `""` is the
+     explicit no-selection state used by the mobile list view. */
+  let desiredSelection = null;
+
   /* Region refreshes are single-flight with one trailing request. A replay
      burst therefore collapses to at most two GETs. */
   let inFlight = false;
   let queuedRefresh = false;
   let queuedSelection;
+  let queuedExplicit = false;
 
-  /* Focus intents survive the swap that replaces the nodes they refer to. */
-  let focusSelectionAfterSwap = false;
-  let focusSelectionId = null;
-  let focusListAfterSwap = false;
-  let restoreFocusAfterRefresh = false;
+  /* True when the in-flight region GET came from a user action (selecting a
+     volume or returning to the list) rather than an automatic refresh. */
+  let regionExplicit = false;
+  let activeSettle = null;
+  let regionToken = 0;
 
-  /* Mobile list mode: an explicit empty selection, not "pick the first". */
-  let listMode = false;
+  /* Actions (POST) and refreshes must not race each other. */
+  let actionInFlight = false;
+
+  let idleCallbacks = [];
 
   /* ── Small helpers ───────────────────────────────────────────────────── */
 
@@ -41,7 +49,8 @@
   }
 
   function currentSelection() {
-    return listMode ? "" : selectedId();
+    if (desiredSelection !== null) return desiredSelection;
+    return selectedId() ?? "";
   }
 
   function rows() {
@@ -63,26 +72,67 @@
     return document.querySelector("#detail .action-error") !== null;
   }
 
+  function isPost(config) {
+    return Boolean(
+      config && String(config.verb || "").toLowerCase() === "post"
+    );
+  }
+
+  /* ── Idle callbacks ──────────────────────────────────────────────────── */
+
+  function runIdleCallbacks() {
+    const callbacks = idleCallbacks;
+    idleCallbacks = [];
+    callbacks.forEach(function (callback) {
+      try {
+        callback();
+      } catch (_) {
+        /* A failed focus callback must not block the rest. */
+      }
+    });
+  }
+
+  function whenRegionIdle(callback) {
+    if (!inFlight && !queuedRefresh) {
+      callback();
+      return;
+    }
+    idleCallbacks.push(callback);
+  }
+
   /* ── Region refresh: single-flight + trailing coalescing ─────────────── */
 
   function finishRegion() {
     inFlight = false;
-    if (!queuedRefresh) return;
-    queuedRefresh = false;
-    const next = queuedSelection;
-    queuedSelection = undefined;
-    sendRegion(next);
+    activeSettle = null;
+
+    if (queuedRefresh) {
+      queuedRefresh = false;
+      const next = queuedSelection;
+      const nextExplicit = queuedExplicit;
+      queuedSelection = undefined;
+      queuedExplicit = false;
+      sendRegion(next, nextExplicit);
+      return;
+    }
+
+    regionExplicit = false;
+    runIdleCallbacks();
   }
 
-  function sendRegion(chosen) {
+  function sendRegion(chosen, explicit) {
     inFlight = true;
+    regionExplicit = explicit === true;
+    const token = ++regionToken;
     let settled = false;
 
     function settle() {
-      if (settled) return;
+      if (settled || token !== regionToken) return;
       settled = true;
+      if (activeSettle === settle) activeSettle = null;
       finishRegion();
     }
+    activeSettle = settle;
 
     const url =
       REGION_URL + "?selected=" + encodeURIComponent(chosen ?? "");
@@ -101,17 +151,21 @@
     }
   }
 
-  function requestRegion(id) {
+  function requestRegion(id, explicit) {
     if (!window.htmx) return false;
     if (!byId("volumes-region")) return false;
 
     const chosen = id === undefined ? currentSelection() : id;
+    const isExplicit = explicit === true;
+
     if (inFlight) {
       queuedRefresh = true;
       queuedSelection = chosen;
+      /* Never downgrade a pending explicit request to an automatic one. */
+      queuedExplicit = queuedExplicit || isExplicit;
       return true;
     }
-    sendRegion(chosen);
+    sendRegion(chosen, isExplicit);
     return true;
   }
 
@@ -119,6 +173,10 @@
      successful action (or a swap that clears it) flushes the refresh. */
   function refreshIfIdle() {
     if (hasOpenConfirm()) {
+      pendingRefresh = true;
+      return false;
+    }
+    if (actionInFlight) {
       pendingRefresh = true;
       return false;
     }
@@ -150,27 +208,47 @@
     if (trigger) trigger.focus();
   }
 
-  function handleAfterSwap() {
-    if (focusSelectionAfterSwap) {
-      focusAfterSelect(focusSelectionId);
-      const rendered = selectedId();
-      if (rendered !== null && rendered === focusSelectionId) {
-        focusSelectionAfterSwap = false;
-        focusSelectionId = null;
-      }
-    } else if (focusListAfterSwap) {
-      const first = rows()[0];
-      if (first) first.focus();
-      const region = byId("volumes-region");
-      if (region && region.dataset.selected === "false") {
-        focusListAfterSwap = false;
-      }
-    }
+  function reconcileDesiredSelection() {
+    if (desiredSelection === null || desiredSelection === "") return;
+    const exists = rows().some(
+      (row) => row.dataset.id === desiredSelection
+    );
+    if (!exists) desiredSelection = null;
+  }
 
-    if (restoreFocusAfterRefresh) {
-      restoreFocusAfterRefresh = false;
-      focusConfirmTrigger();
+  /* ── htmx lifecycle ──────────────────────────────────────────────────── */
+
+  function handleBeforeRequest(event) {
+    const config = event.detail && event.detail.requestConfig;
+    if (isPost(config)) actionInFlight = true;
+  }
+
+  function handleAfterRequest(event) {
+    const config = event.detail && event.detail.requestConfig;
+    if (isPost(config)) actionInFlight = false;
+  }
+
+  function handleBeforeSwap(event) {
+    const detail = event.detail;
+    if (!detail || !detail.target) return;
+    if (detail.target.id !== "volumes-region") return;
+    if (!detail.requestConfig) return;
+    if (String(detail.requestConfig.verb || "").toLowerCase() !== "get") {
+      return;
     }
+    if (regionExplicit) return;
+    if (!hasActionError()) return;
+
+    /* An automatic refresh must not cover the inline error the user is
+       reading. Keep the refresh pending and let this request finish. */
+    detail.shouldSwap = false;
+    pendingRefresh = true;
+    const settle = activeSettle;
+    if (settle) window.setTimeout(settle, 0);
+  }
+
+  function handleAfterSwap() {
+    reconcileDesiredSelection();
 
     /* Flush a refresh deferred by an open confirm (e.g. the confirm-submit
        POST swap). Clear the flag first so this cannot loop; with a request
@@ -182,6 +260,9 @@
   }
 
   if (document.body) {
+    document.body.addEventListener("htmx:beforeRequest", handleBeforeRequest);
+    document.body.addEventListener("htmx:afterRequest", handleAfterRequest);
+    document.body.addEventListener("htmx:beforeSwap", handleBeforeSwap);
     document.body.addEventListener("htmx:afterSwap", handleAfterSwap);
   }
 
@@ -189,16 +270,11 @@
 
   function selectVolume(id) {
     if (id === null || id === undefined) return;
-    listMode = false;
-    focusListAfterSwap = false;
-    focusSelectionAfterSwap = true;
-    focusSelectionId = id;
-
-    if (!requestRegion(id)) {
-      focusSelectionAfterSwap = false;
-      focusSelectionId = null;
+    desiredSelection = id;
+    requestRegion(id, true);
+    whenRegionIdle(function () {
       focusAfterSelect(id);
-    }
+    });
   }
 
   function showList() {
@@ -210,16 +286,12 @@
       row.removeAttribute("aria-current");
     });
 
-    listMode = true;
-    focusSelectionAfterSwap = false;
-    focusSelectionId = null;
-    focusListAfterSwap = true;
-
-    if (!requestRegion("")) {
-      focusListAfterSwap = false;
+    desiredSelection = "";
+    requestRegion("", true);
+    whenRegionIdle(function () {
       const first = rows()[0];
       if (first) first.focus();
-    }
+    });
   }
 
   function moveFocus(row, delta) {
@@ -298,11 +370,10 @@
     }
 
     if (refreshIfIdle()) {
-      /* The region swap is about to replace the trigger: focus it then. */
-      if (shouldFocus) restoreFocusAfterRefresh = true;
+      /* Focus the trigger only after the last region swap has landed. */
+      if (shouldFocus) whenRegionIdle(focusConfirmTrigger);
     } else {
       /* Suppressed by an inline action error: restore focus immediately. */
-      restoreFocusAfterRefresh = false;
       if (shouldFocus) trigger.focus();
     }
   }

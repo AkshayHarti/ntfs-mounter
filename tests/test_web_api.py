@@ -204,3 +204,12 @@ def test_partial_empty_selection_means_no_selection():
     assert r.status_code == 200
     assert 'data-selected="false"' in r.text
     assert "Select a drive" in r.text
+
+
+def test_partial_without_selection_picks_first_volume():
+    c, _ = client()
+    c.get("/?token=tok")
+    r = c.get("/partials/volumes")
+    assert r.status_code == 200
+    assert 'data-selected="true"' in r.text
+    assert "UUID-1" in r.text
