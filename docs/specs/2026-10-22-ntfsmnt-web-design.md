@@ -68,7 +68,9 @@ web = ["fastapi>=0.115", "uvicorn>=0.30", "jinja2>=3.1"]
 
 `ntfsmnt web` imports `ntfsmnt.web.app` lazily. A missing extra prints an
 install hint (`uv tool install 'ntfsmnt[web]'`) instead of a traceback. The
-CLI's 153 existing tests run without the extra installed.
+CLI's 153 existing tests run without the extra installed. The three web
+dependencies are pinned by the lockfile and run as root, so upgrades are a
+deliberate change, not a floating range resolved on install.
 
 ## 5. Process and privilege model
 
@@ -123,12 +125,20 @@ locked down even on loopback.
   The UI disabling the button is convenience, not the gate.
 - **Logging**: request lines exclude query strings (the token) and request
   bodies. stderr captured from ntfs-3g is logged; the session token never is.
+- **Untrusted strings**: volume labels, UUIDs, mount points, and ntfs-3g
+  stderr are attacker-controlled (a USB stick chooses its own label). They are
+  rendered only through Jinja autoescape — never `|safe`, never `innerHTML` —
+  and a test feeds a label like `<img src=x onerror=alert(1)>` through every
+  template. This matters more than usual: the page can mount disks as root, so
+  an XSS here is a root action, not a defacement.
 
 ## 7. API
 
-All JSON. `{id}` is the device basename (`disk4s1`), stable across replugs of
-the same volume only while the device node survives; a stale id is `404` with
-"drive may have been replugged — rescan".
+All JSON. `{id}` is the volume's UUID (`E69303DC-…`), or `dev-<basename>`
+when `diskutil` reports none. It is an identity, not a slot: a page left open
+across a replug gets `409 volume_changed` instead of acting on whatever now
+occupies `disk4s1`. Every action also carries the `label` the user saw; the
+server compares it with fresh discovery before touching anything.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -165,7 +175,7 @@ the same volume only while the device node survives; a stale id is `404` with
   "operation": null,
   "volumes": [
     {
-      "id": "disk4s1",
+      "id": "E69303DC-…",
       "device": "/dev/disk4s1",
       "label": "HD1",
       "uuid": "E69303DC-…",
@@ -195,8 +205,9 @@ the same volume only while the device node survives; a stale id is `404` with
 CLI uses, so the page never re-derives policy: `actions` are the buttons,
 `options` are the Advanced checkboxes (`--recover`, `--remove-hiberfile`).
 `state` is `rw`, `ro`, `unmounted`, or `error`.
-`owner` is null in read-only mode. `doctor` is the last result, not a live
-probe. `operation` is either `null` or
+`owner` is null in read-only mode. `uuid` is null when the fallback
+`dev-<basename>` id is used. `doctor` is the last result, not a live probe.
+`operation` is either `null` or
 `{"id": "op-7", "action": "mount", "volume": "HD1", "started_at": "…"}`.
 
 `GET /api/v1/activity` returns
@@ -208,15 +219,21 @@ probe. `operation` is either `null` or
 Request body (all fields optional except where guarded):
 
 ```json
-{"recover": false, "remove_hiberfile": false, "confirm": "HD1"}
+{"label": "HD1", "recover": false, "remove_hiberfile": false, "confirm": "HD1"}
 ```
+
+`label` is required on every action: it is the identity check the user implied
+by clicking that row, and the server refuses a mismatch rather than trusting the
+path.
 
 Lifecycle for every action:
 
 1. Acquire the single operation lock; else `409 operation_in_progress`.
-2. Re-discover volumes fresh. Resolve `{id}` against that snapshot; if the
-   device is gone, `404 volume_not_found` — never act on the stale snapshot the
-   page was showing.
+2. Re-discover volumes fresh. Resolve `{id}` against that snapshot; if no
+   volume has that identity, `404 volume_not_found`. If the identity still
+   exists but its label or size no longer match the request, `409
+   volume_changed` — never act on a device slot that changed underneath the
+   page.
 3. Validate the request against the fresh volume: action enabled, flags
    permitted, typed label exact.
 4. Run the same `mounter` / `unmounter` call the CLI makes, with the captured
@@ -259,7 +276,8 @@ a no-op message; unmount/eject of an unmounted volume is `409 not_mounted`.
 | `forbidden_origin` | 403 | Bad/missing Origin or `X-NTFSMNT` |
 | `not_root` | 403 | Mutations disabled without root |
 | `owner_unresolved` | 403 | Root without `SUDO_UID`/`--owner` |
-| `volume_not_found` | 404 | Device no longer present |
+| `volume_not_found` | 404 | The UUID/device no longer exists |
+| `volume_changed` | 409 | That identity now names a different label/size |
 | `ambiguous_label` | 409 | Two volumes share the label; candidates listed |
 | `operation_in_progress` | 409 | Another action holds the lock |
 | `not_mounted` | 409 | Unmount/eject with nothing mounted |
@@ -296,8 +314,10 @@ full `state` instead. The client also re-fetches `/api/v1/state` on
 - **After an action**: synchronous rediscovery, then `state` broadcast. No
   polling race.
 - **Reconcile tick**: rediscover every 5 s *only while at least one SSE client
-  is connected*. Broadcast `state` only when it differs from the last one, so
-  an idle page is quiet.
+  is connected*, and skip the broadcast while the operation lock is held —
+  otherwise a snapshot taken between unmount and mount can publish a torn
+  state. Broadcast only when the snapshot differs from the last one, so an idle
+  page is quiet.
 - **Doctor**: on page load, on **Re-check**, and after a failed action. Never
   on the reconcile tick — `ntfs-3g.probe` is not free.
 - **Device changes**: picked up by the reconcile tick; no filesystem watcher in
@@ -414,8 +434,11 @@ These are copied from the CLI spec and must not regress (§7 of the CLI spec):
 `read_mount_table`, probe, sleep).
 
 - typed-label mismatch refuses before any mounter call
+- an action whose `{id}` now names a different label or size returns
+  `volume_changed` and never calls the mounter
 - second concurrent action returns `409` and the first still completes
 - fresh discovery is used per action; a vanished id returns `404`
+- a reconcile snapshot taken during a held lock is not broadcast
 - error classification maps to the table in §7
 - failed mount surfaces `restored` truthfully, including `false`
 
@@ -431,7 +454,9 @@ These are copied from the CLI spec and must not regress (§7 of the CLI spec):
 
 **Template tests** render Jinja partials against fixture snapshots and assert
 the promised accessibility hooks (`aria-live`, `role="alert"`, labels), the
-inline confirm only for guarded actions, and the command preview text.
+inline confirm only for guarded actions, and the command preview text. A
+hostile label (`<img src=x onerror=…>`) and hostile stderr detail must appear
+escaped in every template that renders them.
 
 **SSE tests** assert an event after an action, `Last-Event-ID` replay, and the
 full-state fallback when the id is out of range.
@@ -476,6 +501,8 @@ when the extra is absent. Root-only tests skip when `euid != 0`. The existing
    flow works by keyboard alone.
 10. `uv run pytest -q` is green without the `web` extra; `uv sync --extra web`
     installs the service; the CLI remains stdlib-only at runtime.
+11. A page held open across a drive swap refuses the action with
+    `volume_changed` instead of mounting whatever now occupies the old slot.
 
 ## 13. Open risks
 
@@ -489,10 +516,15 @@ when the extra is absent. Root-only tests skip when `euid != 0`. The existing
 - **Reconcile cost.** `diskutil list -plist` every 5 s per connected page. Fine
   for a handful of drives; if it proves noisy, back off to 10 s or trigger on
   window focus only.
-- **Device identity across replugs.** `disk4s1` can be reused by a different
-  drive. Actions re-resolve against fresh discovery, and the response carries
-  the label that was acted on, but a page left open across a swap can show a
-  stale selection until the next tick.
+- **Device identity across replugs.** Fixed in the design: the API id is the
+  volume UUID and every action re-verifies UUID + label + size fresh, so a
+  replug produces `volume_changed` rather than a mount on the wrong drive.
+  Residual: two cloned volumes sharing a UUID and label fall back to
+  `dev-<basename>`; that is the same ambiguity the CLI already refuses rather
+  than guesses.
+- **Untrusted labels and stderr.** Attacker-controlled text reaches every
+  template. Mitigated by autoescape-only rendering and an explicit hostile-label
+  test; an accidental `|safe` is the failure mode to watch in review.
 - **SSE through a sleeping laptop.** Reconnect plus `visibilitychange` refetch
   covers the common case; a missed event window is corrected by the next full
   `state`.
