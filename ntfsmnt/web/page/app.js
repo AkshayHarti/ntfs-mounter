@@ -225,6 +225,10 @@
      disabled and tells the release path what to restore. */
   let operationBusy = false;
 
+  /* When this page started. An entry written before then is history even if
+     it is the first thing a newly appeared volume shows. */
+  const pageLoadedAt = Date.now();
+
   /* The newest activity id announced so far. History that predates the page
      load is never spoken; only entries newer than every one already shown
      are. Ids are monotonic, so this also refuses reverse-order announces. */
@@ -305,6 +309,12 @@
     const id = activityId(row);
     if (id <= highestAnnounced) return;
     highestAnnounced = id;
+
+    /* A volume that appears mid-session brings its whole history at once.
+       The mark has already advanced, so entries written before this page
+       loaded are consumed silently; a real action still speaks. */
+    const at = Date.parse(row.dataset.activityAt || "");
+    if (Number.isFinite(at) && at < pageLoadedAt - 5000) return;
 
     function textOf(selector) {
       const node = row.querySelector(selector);

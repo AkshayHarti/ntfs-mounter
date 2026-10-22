@@ -19,6 +19,7 @@
     {% for entry in activity %}
     <li class="log__row{% if not entry.ok %} is-failure{% endif %}"
         data-activity-id="{{ entry.id }}"
+        data-activity-at="{{ entry.at }}"
         data-activity-volume="{{ entry.volume }}">
       <time class="log__time" datetime="{{ entry.at }}">{{ entry.at }}</time>
       <span class="log__action">{{ entry.action }}</span>

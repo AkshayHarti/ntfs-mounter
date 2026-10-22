@@ -583,10 +583,8 @@ a {
   display: none;
 }
 
-/* Only the label carries the amber accent; the detail text stays ink so it
-   clears the contrast floor. */
+/* Status text stays ink for contrast; the amber accent is the left border. */
 .operation__label {
-  color: var(--amber);
   font-weight: 600;
 }
 
