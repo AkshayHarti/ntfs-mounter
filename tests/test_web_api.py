@@ -228,17 +228,39 @@ def test_security_headers_on_every_response():
     c.get("/?token=tok")
     ok = c.get("/api/v1/state")
     rejected = c.get("/api/v1/state", headers={"host": "evil.test"})
-    for response in (ok, rejected):
+    anonymous, _ = client()
+    unauthorized = anonymous.get("/api/v1/state")
+    static = anonymous.get("/static/app.css")
+    assert unauthorized.status_code == 401
+    assert static.status_code == 200
+    for response in (ok, rejected, unauthorized, static):
         assert response.headers["x-frame-options"] == "DENY"
         assert response.headers["x-content-type-options"] == "nosniff"
         assert response.headers["content-security-policy"] == "frame-ancestors 'none'"
 
 
-def test_empty_label_is_422():
-    c, _ = client()
-    r = c.post("/api/v1/volumes/UUID-1/mount", json={"label": ""}, headers=auth(c))
-    assert r.status_code == 422
-    assert r.json()["error"]["code"] == "invalid_request"
+def test_empty_label_is_422_for_mount_only(monkeypatch):
+    import ntfsmnt.web.service as svc_mod
+
+    ejected = []
+    monkeypatch.setattr(svc_mod, "eject_volume",
+                        lambda volume, **kw: ejected.append(volume))
+    settings, svc = _service()
+    # A volume with no label can still be unmounted or ejected.
+    svc._discover = lambda: [make_volume(label="")]
+    c = TestClient(create_app(settings, service=svc))
+    c.get("/?token=tok")
+    headers = {"X-NTFSMNT": "1", "Origin": "http://testserver"}
+
+    mount = c.post("/api/v1/volumes/UUID-1/mount", json={"label": ""},
+                   headers=headers)
+    assert mount.status_code == 422
+    assert mount.json()["error"]["code"] == "invalid_request"
+
+    eject = c.post("/api/v1/volumes/UUID-1/eject", data={"label": ""},
+                   headers={**headers, "HX-Request": "true"})
+    assert eject.status_code == 200
+    assert ejected
 
 
 def test_failed_htmx_action_refreshes_doctor_with_oob_fragment(monkeypatch):
@@ -266,6 +288,13 @@ def test_failed_htmx_action_refreshes_doctor_with_oob_fragment(monkeypatch):
     assert 'hx-swap-oob="true"' in r.text
     assert 'id="doctor-status"' in r.text
     assert "hibernated" in r.text
+
+    # A failure that never touched the host must not pay for a probe.
+    refreshes.clear()
+    r = c.post("/api/v1/volumes/UUID-1/mount",
+               data={"label": "HD2"}, headers={**headers, "HX-Request": "true"})
+    assert r.status_code == 200
+    assert not refreshes
 
 
 def test_startup_publishes_doctor_event():

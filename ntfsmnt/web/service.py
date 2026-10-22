@@ -252,6 +252,12 @@ class Service:
               remove_hiberfile=False, confirm=None):
         if (error := self._guard()) is not None:
             return self._result("mount", error, label)
+        if not label:
+            # A label is the mount point name and the typed confirmation, so a
+            # bare volume can still be unmounted or ejected but never mounted.
+            return self._result("mount", ActionError(
+                "invalid_request", "A non-empty label is required to mount.", 422,
+                "Give the volume a label, or use the CLI."), label)
         try:
             with self.operation("mount", label):
                 try:

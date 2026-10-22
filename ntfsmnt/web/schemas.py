@@ -92,7 +92,7 @@ class ActivityModel(BaseModel):
 
 
 class ActionRequest(BaseModel):
-    label: str = Field(min_length=1, max_length=255)
+    label: str = Field(min_length=0, max_length=255)
     size: int | None = None
     recover: bool = False
     remove_hiberfile: bool = False

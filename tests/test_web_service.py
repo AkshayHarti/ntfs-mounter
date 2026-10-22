@@ -297,6 +297,28 @@ def test_eject_success_returns_no_volume(monkeypatch):
     assert result.restored is None
 
 
+def test_eject_of_unlabeled_volume_reaches_unmounter(monkeypatch):
+    calls = {}
+
+    def fake_eject(volume, **kw):
+        calls.update(kw)
+
+    monkeypatch.setattr(svc_mod, "eject_volume", fake_eject)
+    svc = make_service([make_volume(label="")])
+    result = svc.eject("UUID-1", label="")
+    assert result.ok is True
+    assert calls  # the unmounter ran; the empty label was not refused
+
+
+def test_mount_of_unlabeled_volume_is_refused(monkeypatch):
+    monkeypatch.setattr(svc_mod, "mount_volume", lambda *a, **k: pytest.fail("called"))
+    svc = make_service([make_volume(label="")])
+    result = svc.mount("UUID-1", label="")
+    assert result.ok is False
+    assert result.error.code == "invalid_request"
+    assert result.error.status == 422
+
+
 def test_mount_failure_dirty_maps_to_blocked_dirty(monkeypatch):
     def fail(*a, **k):
         from ntfsmnt.mounter import MountFailed

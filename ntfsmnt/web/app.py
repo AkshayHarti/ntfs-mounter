@@ -49,6 +49,14 @@ def require_mutation(settings: Settings, request: Request) -> None:
 
 _FORM_TRUE = {"on", "true", "1", "yes"}
 
+# Failures that never touched the host: re-probing the doctor after them would
+# only add latency to the response.
+_NO_DOCTOR_REFRESH = frozenset({
+    "operation_in_progress", "volume_not_found", "volume_changed",
+    "ambiguous_volume", "confirmation_mismatch", "invalid_request",
+    "not_mounted",
+})
+
 
 def _form_bool(raw: str | None) -> bool:
     return (raw or "").strip().lower() in _FORM_TRUE
@@ -297,9 +305,11 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
         except Exception:
             logger.exception("action %s on %s failed", action, volume_id)
             return _error(500, "internal", "Unexpected error; see the server log.")
-        if not result.ok:
-            # Spec §8: a failure re-checks the host. Off-loop, and never fatal
-            # to the response the user is waiting for.
+        if not result.ok and (
+            result.error is None or result.error.code not in _NO_DOCTOR_REFRESH
+        ):
+            # Spec §8: a host-touching failure re-checks the host. Off-loop, and
+            # never fatal to the response the user is waiting for.
             try:
                 await asyncio.to_thread(svc.refresh_doctor)
             except Exception:

@@ -13,7 +13,9 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 ## Commands
 
 - Install deps: `uv sync` (add `--extra web` for the browser UI and its tests)
-- Test: `uv run pytest -q` (252 tests; the web tests skip without the extra)
+- Test: `uv run pytest -q` (256 tests; without `--extra web` the FastAPI/Jinja
+  API, page, and schema tests skip, while the service, models, and config tests
+  run)
 - Manual acceptance: `tests/manual/acceptance.md` (real hardware, root, Full
   Disk Access terminal)
 - Build/run: `uv run ntfsmnt ...`
@@ -149,8 +151,10 @@ CLI rules above. Do not weaken these either.
    a second request is `409 operation_in_progress`. The reconcile tick skips
    publishing while the lock is held, and re-checks it after the snapshot.
 5. **Doctor freshness.** The doctor result is refreshed on page load, on
-   Re-check, and after a failed action — and the startup check runs before the
-   first request. It is never refreshed on the 5 s reconcile tick, and every
+   Re-check, and after a failed action that touched the host — and the startup
+   check runs before the first request. Purely bookkeeping failures
+   (`volume_changed`, `confirmation_mismatch`, `operation_in_progress`, …) do
+   not re-probe. It is never refreshed on the 5 s reconcile tick, and every
    refresh publishes a `doctor` event.
 6. **Owner ids come from `SUDO_UID`/`SUDO_GID`** (or `--owner`), captured before
    the mount; the mount-point ownership check still uses the invoking user, not

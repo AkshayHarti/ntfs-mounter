@@ -67,3 +67,22 @@ def test_reconcile_is_skipped_while_busy():
         assert bus.replay(0) == []
 
     asyncio.run(go())
+
+
+def test_reconcile_is_skipped_if_busy_after_snapshot():
+    class Fake:
+        def __init__(self):
+            self.busy = False
+
+        def snapshot(self):
+            from ntfsmnt.web.models import DoctorStatus, HostView, Snapshot
+            self.busy = True  # an action took the lock while we snapshot
+            return Snapshot("now", HostView(True, False, None, True, True),
+                            DoctorStatus("ok", "now", ()), None, ())
+
+    async def go():
+        bus = EventBus()
+        assert await reconcile_once(Fake(), bus, "last") == "last"
+        assert bus.replay(0) == []
+
+    asyncio.run(go())

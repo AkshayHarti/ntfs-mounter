@@ -100,6 +100,17 @@ def test_subscriber_receives_published_frame():
     asyncio.run(go())
 
 
+def test_bus_publish_after_loop_closed_does_not_raise():
+    async def bind_to_running_loop():
+        bus = EventBus()
+        bus.bind(asyncio.get_running_loop())
+        return bus
+
+    bus = asyncio.run(bind_to_running_loop())  # asyncio.run closes the loop
+    assert bus.publish("state", {"late": True}) == 1
+    assert bus.replay(0) == ['id: 1\nevent: state\ndata: {"late": true}\n\n']
+
+
 def test_action_error_and_result_defaults():
     error = ActionError(code="busy", message="HD1 is in use.", status=409)
     assert error.next_step is None and error.volume is None
