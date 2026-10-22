@@ -230,10 +230,10 @@ Lifecycle for every action:
 
 1. Acquire the single operation lock; else `409 operation_in_progress`.
 2. Re-discover volumes fresh. Resolve `{id}` against that snapshot; if no
-   volume has that identity, `404 volume_not_found`. If the identity still
-   exists but its label or size no longer match the request, `409
-   volume_changed` — never act on a device slot that changed underneath the
-   page.
+   volume has that identity, `404 volume_not_found`; if more than one does,
+   `409 ambiguous_volume`. If the identity still exists but its label or size
+   no longer match the request, `409 volume_changed` — never act on a device
+   slot that changed underneath the page.
 3. Validate the request against the fresh volume: action enabled, flags
    permitted, typed label exact.
 4. Run the same `mounter` / `unmounter` call the CLI makes, with the captured
@@ -279,6 +279,7 @@ a no-op message; unmount/eject of an unmounted volume is `409 not_mounted`.
 | `volume_not_found` | 404 | The UUID/device no longer exists |
 | `volume_changed` | 409 | That identity now names a different label/size |
 | `ambiguous_label` | 409 | Two volumes share the label; candidates listed |
+| `ambiguous_volume` | 409 | Two volumes share the identity (cloned UUID) |
 | `operation_in_progress` | 409 | Another action holds the lock |
 | `not_mounted` | 409 | Unmount/eject with nothing mounted |
 | `doctor_blocker` | 409 | FUSE-T / ntfs-3g / device access missing |
@@ -287,6 +288,7 @@ a no-op message; unmount/eject of an unmounted volume is `409 not_mounted`.
 | `busy` | 409 | Mount point busy; names the blocker |
 | `permission_denied` | 403 | Root but no Full Disk Access |
 | `confirmation_mismatch` | 400 | Typed label wrong or absent |
+| `action_failed` | 500 | The CLI's message fits no more specific code |
 | `internal` | 500 | Unexpected; detail in server log only |
 
 `next_step` is always present for failures that have one, and the UI turns a
