@@ -58,3 +58,8 @@ def test_cookie_matches_only_its_token():
     assert cookie_matches("tok", cookie)
     assert not cookie_matches("other", cookie)
     assert not cookie_matches("tok", None)
+
+
+def test_non_ascii_presented_never_matches():
+    assert not cookie_matches("tok", "ÿ")
+    assert not cookie_matches("tok", "\udcff")

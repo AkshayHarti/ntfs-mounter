@@ -73,6 +73,11 @@ def cookie_value(token: str) -> str:
 
 
 def cookie_matches(token: str, presented: str | None) -> bool:
-    return presented is not None and hmac.compare_digest(
-        cookie_value(token), presented
-    )
+    if presented is None:
+        return False
+    expected = cookie_value(token).encode("utf-8")
+    try:
+        candidate = presented.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return hmac.compare_digest(expected, candidate)
