@@ -64,11 +64,16 @@ async def reconcile_once(service, bus: EventBus, last_json: str) -> str:
         return last_json
     snap = await asyncio.to_thread(service.snapshot)
     payload = state_model(snap).model_dump(mode="json")
-    current = json.dumps(payload, sort_keys=True)
+    current = _state_key(payload)
     if current != last_json:
         bus.publish("state", payload)
         return current
     return last_json
+
+
+def _state_key(payload: dict) -> str:
+    stable = {key: value for key, value in payload.items() if key != "generated_at"}
+    return json.dumps(stable, sort_keys=True)
 
 
 def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI:
@@ -82,9 +87,14 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
         async def reconcile_loop():
             while True:
                 await asyncio.sleep(5)
-                if svc.events.has_subscribers():
-                    app.state.last_state_json = await reconcile_once(
-                        svc, svc.events, app.state.last_state_json)
+                if not svc.events.has_subscribers():
+                    continue
+                try:
+                    async with app.state.state_lock:
+                        app.state.last_state_json = await reconcile_once(
+                            svc, svc.events, app.state.last_state_json)
+                except Exception:
+                    logger.exception("reconcile tick failed")
 
         task = asyncio.create_task(reconcile_loop())
         try:
@@ -99,6 +109,7 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
     app = FastAPI(title="ntfsmnt web", docs_url=None, redoc_url=None,
                   lifespan=lifespan)
     app.state.last_state_json = ""
+    app.state.state_lock = asyncio.Lock()
 
     @app.middleware("http")
     async def host_guard(request: Request, call_next):
@@ -145,8 +156,9 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
         # A new connection gets the current state immediately; the reconcile
         # tick only runs while at least one subscriber is attached.
         try:
-            app.state.last_state_json = await reconcile_once(
-                svc, svc.events, app.state.last_state_json)
+            async with app.state.state_lock:
+                app.state.last_state_json = await reconcile_once(
+                    svc, svc.events, app.state.last_state_json)
         except Exception:
             logger.exception("failed to publish initial SSE state")
         return StreamingResponse(
@@ -180,7 +192,7 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
             logger.exception("action %s on %s failed", action, volume_id)
             return _error(500, "internal", "Unexpected error; see the server log.")
         try:
-            app.state.last_state_json = await _publish_state(svc)
+            app.state.last_state_json = await _publish_state(svc, request.app)
         except Exception:
             logger.exception("failed to publish state after %s on %s", action, volume_id)
         if result.ok:
@@ -198,8 +210,10 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
     return app
 
 
-async def _publish_state(svc: Service) -> str:
-    snap = await asyncio.to_thread(svc.snapshot)
-    payload = state_model(snap).model_dump(mode="json")
-    svc.events.publish("state", payload)
-    return json.dumps(payload, sort_keys=True)
+async def _publish_state(svc: Service, app: FastAPI) -> str:
+    async with app.state.state_lock:
+        snap = await asyncio.to_thread(svc.snapshot)
+        payload = state_model(snap).model_dump(mode="json")
+        svc.events.publish("state", payload)
+        app.state.last_state_json = _state_key(payload)
+        return app.state.last_state_json

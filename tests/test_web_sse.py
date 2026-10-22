@@ -41,7 +41,7 @@ def test_reconcile_publishes_only_on_change():
         def snapshot(self):
             from ntfsmnt.web.models import (DoctorStatus, HostView, Snapshot)
             self.n += 1
-            return Snapshot("now", HostView(True, False, None, True, True),
+            return Snapshot(f"now-{self.n}", HostView(True, False, None, True, True),
                             DoctorStatus("ok", "now", ()), None, ())
 
     async def go():
@@ -49,10 +49,9 @@ def test_reconcile_publishes_only_on_change():
         fake = Fake()
         first = await reconcile_once(fake, bus, "")
         second = await reconcile_once(fake, bus, first)
-        assert first != ""
-        assert second == first  # unchanged snapshot returns the same json
+        assert second == first  # only generated_at changed, so still unchanged
         await asyncio.sleep(0)
-        assert len(bus.replay(0)) == 1  # only the changed one was published
+        assert len(bus.replay(0)) == 1  # only the first snapshot was published
 
     asyncio.run(go())
 
