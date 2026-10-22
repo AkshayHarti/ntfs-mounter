@@ -116,13 +116,23 @@ def test_mount_success_returns_result_and_volume(monkeypatch):
     assert data["volume"]["label"] == "HD1"
 
 
-def test_htmx_form_post_mounts_and_returns_detail_fragment(monkeypatch):
+def test_htmx_form_post_returns_fragment(monkeypatch):
     from ntfsmnt.mounter import MountResult
     import ntfsmnt.web.service as svc_mod
     monkeypatch.setattr(
         svc_mod, "mount_volume",
         lambda volume, **kw: MountResult(volume, "/Volumes/HD1", 4242))
-    c, _ = client()
+    c, svc = client()
+    calls = []
+    real_mount = svc.mount
+
+    # Service.mount is where the decoded ActionRequest fields land;
+    # mount_volume itself only receives the resolved volume.
+    def spy_mount(target, *, label, size=None, **kw):
+        calls.append({"label": label, "size": size})
+        return real_mount(target, label=label, size=size, **kw)
+
+    monkeypatch.setattr(svc, "mount", spy_mount)
     r = c.post("/api/v1/volumes/UUID-1/mount",
                data={"label": "HD1", "size": "1000000000"},
                headers={**auth(c), "HX-Request": "true"})
@@ -130,6 +140,32 @@ def test_htmx_form_post_mounts_and_returns_detail_fragment(monkeypatch):
     assert r.headers["content-type"].startswith("text/html")
     assert 'id="detail"' in r.text
     assert "HD1" in r.text
+    assert calls[0]["label"] == "HD1"
+    assert calls[0]["size"] == 1000000000
+
+
+def test_page_renders_master_detail():
+    c, _ = client()
+    c.get("/?token=tok")
+    r = c.get("/")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    assert 'id="volumes-region"' in r.text
+    assert "HD1" in r.text
+
+
+def test_partial_requires_session():
+    c, _ = client()
+    assert c.get("/partials/volumes").status_code == 401
+
+
+def test_partial_returns_region():
+    c, _ = client()
+    c.get("/?token=tok")
+    r = c.get("/partials/volumes?selected=UUID-1")
+    assert r.status_code == 200
+    assert 'id="volumes-region"' in r.text
+    assert 'id="detail"' in r.text
 
 
 def test_second_action_is_409_while_lock_held():
