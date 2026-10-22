@@ -63,3 +63,71 @@ def test_activity_is_empty_initially():
     c, _ = client()
     c.get("/?token=tok")
     assert c.get("/api/v1/activity").json() == {"entries": []}
+
+
+def auth(c):
+    c.get("/?token=tok")
+    return {"X-NTFSMNT": "1", "Origin": "http://testserver"}
+
+
+def test_mutation_requires_header():
+    c, _ = client()
+    c.get("/?token=tok")
+    r = c.post("/api/v1/volumes/UUID-1/mount",
+               json={"label": "HD1"}, headers={"Origin": "http://testserver"})
+    assert r.status_code == 403
+
+
+def test_mutation_requires_origin():
+    c, _ = client()
+    c.get("/?token=tok")
+    r = c.post("/api/v1/volumes/UUID-1/mount",
+               json={"label": "HD1"}, headers={"X-NTFSMNT": "1"})
+    assert r.status_code == 403
+
+
+def test_unknown_action_is_404():
+    c, _ = client()
+    r = c.post("/api/v1/volumes/UUID-1/explode", json={"label": "HD1"}, headers=auth(c))
+    assert r.status_code == 404
+
+
+def test_guarded_mount_without_label_is_400(monkeypatch):
+    import ntfsmnt.web.service as svc_mod
+    monkeypatch.setattr(svc_mod, "mount_volume", lambda *a, **k: pytest.fail("called"))
+    c, _ = client()
+    r = c.post("/api/v1/volumes/UUID-1/mount",
+               json={"label": "HD1", "remove_hiberfile": True}, headers=auth(c))
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "confirmation_mismatch"
+
+
+def test_mount_success_returns_result_and_volume(monkeypatch):
+    from ntfsmnt.mounter import MountResult
+    import ntfsmnt.web.service as svc_mod
+    monkeypatch.setattr(
+        svc_mod, "mount_volume",
+        lambda volume, **kw: MountResult(volume, "/Volumes/HD1", 4242))
+    c, _ = client()
+    r = c.post("/api/v1/volumes/UUID-1/mount", json={"label": "HD1"}, headers=auth(c))
+    data = r.json()
+    assert r.status_code == 200
+    assert data["result"]["ok"] is True
+    assert data["volume"]["label"] == "HD1"
+
+
+def test_second_action_is_409_while_lock_held():
+    c, svc = client()
+    headers = auth(c)
+    with svc.operation("mount", "HD1"):
+        r = c.post("/api/v1/volumes/UUID-1/mount",
+                   json={"label": "HD1"}, headers=headers)
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "operation_in_progress"
+
+
+def test_wrong_label_is_volume_changed():
+    c, _ = client()
+    r = c.post("/api/v1/volumes/UUID-1/mount", json={"label": "HD2"}, headers=auth(c))
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "volume_changed"

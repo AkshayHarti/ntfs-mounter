@@ -1,5 +1,6 @@
 import asyncio
 import hmac
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -7,11 +8,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from ntfsmnt.web.config import Settings, cookie_matches, cookie_value
-from ntfsmnt.web.schemas import (ActivityModel, ErrorResponse, StateModel,
-                                 activity_model, state_model)
+from ntfsmnt.web.schemas import (ActionRequest, ActivityModel, ErrorResponse,
+                                 StateModel, activity_model, error_response,
+                                 result_model, state_model)
 from ntfsmnt.web.service import Service
 
 PAGE_DIR = Path(__file__).parent / "page"
+
+logger = logging.getLogger("ntfsmnt.web")
 
 
 def _error(status: int, code: str, message: str, next_step: str | None = None):
@@ -75,6 +79,37 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
         require_session(settings, request)
         return activity_model(svc.activity())
 
+    ACTIONS = {
+        "mount": lambda target, body: svc.mount(
+            target, label=body.label, size=body.size, recover=body.recover,
+            remove_hiberfile=body.remove_hiberfile, confirm=body.confirm),
+        "unmount": lambda target, body: svc.unmount(
+            target, label=body.label, size=body.size),
+        "eject": lambda target, body: svc.eject(
+            target, label=body.label, size=body.size),
+    }
+
+    @app.post("/api/v1/volumes/{volume_id}/{action}")
+    async def act(volume_id: str, action: str, body: ActionRequest, request: Request):
+        try:
+            require_mutation(settings, request)
+        except HTTPException as exc:
+            code = "unauthorized" if exc.status_code == 401 else "forbidden_origin"
+            return _error(exc.status_code, code, exc.detail)
+        if action not in ACTIONS:
+            return _error(404, "not_found", f"Unknown action {action!r}.")
+        try:
+            result = await asyncio.to_thread(ACTIONS[action], volume_id, body)
+        except Exception:
+            logger.exception("action %s on %s failed", action, volume_id)
+            return _error(500, "internal", "Unexpected error; see the server log.")
+        await _publish_state(svc)
+        if result.ok:
+            return result_model(result)
+        error = result.error
+        return JSONResponse(
+            error_response(error).model_dump(), status_code=error.status)
+
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException):
         code = "unauthorized" if exc.status_code == 401 else "forbidden_origin"
@@ -82,3 +117,8 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
 
     app.mount("/static", StaticFiles(directory=PAGE_DIR), name="static")
     return app
+
+
+async def _publish_state(svc: Service) -> None:
+    snap = await asyncio.to_thread(svc.snapshot)
+    svc.events.publish("state", state_model(snap).model_dump(mode="json"))
