@@ -111,3 +111,147 @@ def test_doctor_findings_map_to_severity(monkeypatch):
     assert doc.status == "blocker"
     assert [(f.check, f.severity) for f in doc.findings] == [("fuse-t", "blocker")]
     assert svc.snapshot().host.fuse_t is False
+
+
+from ntfsmnt.web.service import OperationInProgress
+import ntfsmnt.web.service as svc_mod
+
+
+def test_mount_success_uses_owner_and_flags(monkeypatch):
+    calls = {}
+
+    def fake_mount(volume, **kw):
+        calls.update(kw)
+        from ntfsmnt.mounter import MountResult
+        return MountResult(volume=volume, mount_point="/Volumes/HD1", pid=4242)
+
+    monkeypatch.setattr(svc_mod, "mount_volume", fake_mount)
+    svc = make_service([make_volume()])
+    result = svc.mount("UUID-1", label="HD1", recover=True)
+    assert result.ok is True
+    assert calls["uid"] == 501 and calls["gid"] == 20
+    assert calls["recover"] is True and calls["remove_hiberfile"] is False
+    assert calls["label_shared"] is False
+
+
+def test_mount_rejects_wrong_label_without_calling_mounter(monkeypatch):
+    monkeypatch.setattr(svc_mod, "mount_volume", lambda *a, **k: pytest.fail("called"))
+    svc = make_service([make_volume()])
+    result = svc.mount("UUID-1", label="HD2")
+    assert result.error.code == "volume_changed"
+    assert result.error.status == 409
+
+
+def test_mount_rejects_wrong_size_without_calling_mounter(monkeypatch):
+    monkeypatch.setattr(svc_mod, "mount_volume", lambda *a, **k: pytest.fail("called"))
+    svc = make_service([make_volume(size=1_000_000_000)])
+    result = svc.mount("UUID-1", label="HD1", size=2_000_000_000)
+    assert result.error.code == "volume_changed"
+
+
+def test_mount_rejects_unknown_identity():
+    svc = make_service([make_volume()])
+    result = svc.mount("UUID-404", label="HD1")
+    assert result.error.code == "volume_not_found"
+    assert result.error.status == 404
+
+
+def test_duplicate_uuid_is_ambiguous():
+    svc = make_service([make_volume(), make_volume(identifier="disk5s1")])
+    result = svc.mount("UUID-1", label="HD1")
+    assert result.error.code == "ambiguous_volume"
+    assert result.error.status == 409
+
+
+def test_action_in_read_only_mode_is_forbidden():
+    svc = make_service([make_volume()], read_only=True)
+    result = svc.mount("UUID-1", label="HD1")
+    assert result.error.code in {"not_root", "owner_unresolved"}
+    assert result.error.status == 403
+
+
+def test_action_with_doctor_blocker_is_409():
+    doc = DoctorStatus(
+        "blocker", "now",
+        (Finding("blocker", "ntfs-3g", "ntfs-3g missing", "install it"),),
+    )
+    svc = make_service([make_volume()], doctor=doc)
+    result = svc.mount("UUID-1", label="HD1")
+    assert result.error.code == "doctor_blocker"
+    assert result.error.status == 409
+
+
+def test_guarded_mount_requires_exact_label(monkeypatch):
+    monkeypatch.setattr(svc_mod, "mount_volume", lambda *a, **k: pytest.fail("called"))
+    svc = make_service([make_volume()])
+    for confirm in (None, "HD", "hd1"):
+        result = svc.mount("UUID-1", label="HD1", remove_hiberfile=True, confirm=confirm)
+        assert result.error.code == "confirmation_mismatch"
+        assert result.error.status == 400
+
+
+def test_hibernated_failure_offers_guarded_mount(monkeypatch):
+    def fail(*a, **k):
+        from ntfsmnt.mounter import MountFailed
+        raise MountFailed(
+            "The volume is hibernated. Re-run with --remove-hiberfile. "
+            "Apple's read-only mount was restored."
+        )
+
+    monkeypatch.setattr(svc_mod, "mount_volume", fail)
+    svc = make_service([make_volume()])
+    result = svc.mount("UUID-1", label="HD1")
+    assert result.ok is False
+    assert result.restored is True
+    assert result.error.code == "blocked_hibernated"
+    assert result.error.status == 422
+    assert result.error.next_step
+
+
+def test_restore_attempt_is_not_reported_as_restored(monkeypatch):
+    def fail(*a, **k):
+        from ntfsmnt.mounter import MountFailed
+        raise MountFailed("The device vanished. Read-only restore attempted.")
+
+    monkeypatch.setattr(svc_mod, "mount_volume", fail)
+    result = make_service([make_volume()]).mount("UUID-1", label="HD1")
+    assert result.restored is False
+
+
+def test_second_action_while_locked_is_refused(monkeypatch):
+    svc = make_service([make_volume()])
+    with svc.operation("mount", "HD1"):
+        result = svc.mount("UUID-1", label="HD1")
+    assert result.error.code == "operation_in_progress"
+    assert result.error.status == 409
+
+
+def test_mount_activity_is_recorded(monkeypatch):
+    from ntfsmnt.mounter import MountResult
+    monkeypatch.setattr(svc_mod, "mount_volume",
+                        lambda volume, **kw: MountResult(volume, "/Volumes/HD1", 1))
+    svc = make_service([make_volume()])
+    svc.mount("UUID-1", label="HD1")
+    entry = svc.activity()[0]
+    assert (entry.action, entry.volume, entry.ok) == ("mount", "HD1", True)
+
+
+def test_unmount_of_unmounted_volume_is_not_mounted():
+    svc = make_service([make_volume()])
+    result = svc.unmount("UUID-1", label="HD1")
+    assert result.error.code == "not_mounted"
+
+
+def test_eject_of_mounted_volume_is_busy():
+    svc = make_service([make_volume(mounts=[RO], mount_point="/Volumes/HD1")])
+    result = svc.eject("UUID-1", label="HD1")
+    assert result.error.code == "busy"
+
+
+def test_unmount_reports_restore_failure(monkeypatch):
+    monkeypatch.setattr(svc_mod, "unmount_volume", lambda *a, **k: False)
+    rw = make_volume(mounts=[RW], mount_point="/Volumes/HD1")
+    result = make_service([rw]).unmount("UUID-1", label="HD1")
+    assert result.ok is False
+    assert result.restored is False
+    assert result.error.code == "action_failed"
