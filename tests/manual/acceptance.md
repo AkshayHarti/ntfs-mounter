@@ -322,7 +322,7 @@ reference behaviour and predates the CLI. Prefer this procedure.
 The web UI is an optional extra (`uv sync --extra web`). Run these steps against
 HD1 after the CLI acceptance above, from the same Full Disk Access terminal.
 
-1. `sudo ntfsmnt web` prints a URL; open it; every volume and state chip matches `ntfsmnt list`.
+1. `sudo uv run ntfsmnt web` prints a URL; open it; every volume and state chip matches `ntfsmnt list`.
 2. Mount HD1 from the page; write a file in Finder; state flips to writable without a manual refresh; the log records it.
 3. Unmount; read-only mount returns and the chip flips back.
 4. Eject; the volume disappears after the reconcile tick.

@@ -360,16 +360,10 @@ def _cmd_eject(args: argparse.Namespace, collector: Callable[[], list[Volume]]) 
 
 
 def _cmd_web(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
-    try:
-        from ntfsmnt.web.app import run_server
-        from ntfsmnt.web.config import settings_from
-    except ImportError:
-        print(
-            "ntfsmnt: the web UI needs optional dependencies; "
-            "install with `uv tool install 'ntfsmnt[web]'`",
-            file=sys.stderr,
-        )
-        return 1
+    # config.py is stdlib-only, so owner validation happens before the optional
+    # web dependencies are imported.
+    from ntfsmnt.web.config import settings_from
+
     try:
         settings = settings_from(
             port=args.port, owner=args.owner, environ=os.environ,
@@ -378,6 +372,15 @@ def _cmd_web(args: argparse.Namespace, collector: Callable[[], list[Volume]]) ->
     except ValueError as exc:
         print(f"ntfsmnt: {exc}", file=sys.stderr)
         return 2
+    try:
+        from ntfsmnt.web.app import run_server
+    except ImportError:
+        print(
+            "ntfsmnt: the web UI needs optional dependencies; "
+            "install with `uv tool install 'ntfsmnt[web]'`",
+            file=sys.stderr,
+        )
+        return 1
     run_server(settings)
     return 0
 

@@ -312,8 +312,10 @@ sudo uv run ntfsmnt web --owner 501:20  # mount owner, when SUDO_UID/GID is abse
 It prints one line and keeps running until `Ctrl-C`:
 
 ```
-ntfsmnt web: http://127.0.0.1:8765/?token=<random>
+ntfsmnt web: http://127.0.0.1:<port>/?token=<random>
 ```
+
+`<port>` is the OS-chosen port, or the value of `--port`.
 
 The URL is loopback-only. The token is a one-time launch secret: opening the URL
 exchanges it for an HttpOnly session cookie and redirects to `/`, so the token
@@ -585,7 +587,7 @@ uv sync
 uv run pytest -q
 ```
 
-The suite has 125 tests and never touches hardware. Subprocess effects
+The suite has 244 tests and never touches hardware. Subprocess effects
 (`diskutil`, `ntfs-3g`, `mount`, `pgrep`, `kill`, `sleep`) are injected as
 callables, and the mount-point creation, write probe, and ownership `stat` are
 monkeypatched in tests that exercise the orchestration.
