@@ -1,205 +1,26 @@
 "use strict";
 
 /*
- * ntfsmnt agent client.
+ * ntfsmnt agent client: a conversational assistant whose replies ARE the
+ * interface. Every turn renders the OpenUI Lang the agent composed, inline in
+ * the conversation, with working CTAs.
  *
- *  1. speak AG-UI over SSE (POST /agent/run);
- *  2. render OpenUI Lang from the closed library — the parser mirrors
- *     ntfsmnt/agent/openui.py; unknown components and actions are errors,
- *     never executed;
- *  3. dispatch allow-listed actions to the existing authenticated routes.
+ * Dependencies: opui-lang.js (the parser, also unit-tested under node).
  *
  * Security rules baked into this file:
  *   - every agent-produced string reaches the DOM through textContent;
  *   - button availability comes from the live STATE_SNAPSHOT, never from the
  *     generated program;
- *   - an action name outside the allow-list renders a disabled button.
- *
- * Everything the agent produces is data. A volume label is attacker
- * controlled, so no generated value is ever assigned to innerHTML.
+ *   - an action outside the allow-list renders a disabled button with the
+ *     reason visible;
+ *   - parse problems are never dumped as raw language: the user sees a short
+ *     apology, the console carries the detail.
  */
 
-/* ── 1. OpenUI Lang parser ──────────────────────────────────────────────── */
+const Lang = window.OpUILang;
+if (!Lang) throw new Error("opui-lang.js must load before agent.js");
 
-const ESCAPES = { "\"": "\"", "\\": "\\", "/": "/", n: "\n", r: "\r",
-                  t: "\t", b: "\b", f: "\f" };
-const IDENT_START = /[A-Za-z_$]/;
-const IDENT_PART = /[A-Za-z0-9_$]/;
-
-class LangError extends Error {}
-
-function tokenize(text) {
-  const tokens = [];
-  let pos = 0;
-  while (pos < text.length) {
-    const ch = text[pos];
-    if (/\s/.test(ch)) {
-      pos++;
-      continue;
-    }
-    if (ch === "\"") {
-      pos++;
-      let out = "";
-      while (pos < text.length && text[pos] !== "\"") {
-        if (text[pos] === "\\") {
-          const esc = text[pos + 1];
-          pos += 2;
-          if (esc === "u") {
-            const digits = text.slice(pos, pos + 4);
-            if (!/^[0-9a-fA-F]{4}$/.test(digits)) throw new LangError("bad unicode escape");
-            out += String.fromCharCode(parseInt(digits, 16));
-            pos += 4;
-          } else if (esc in ESCAPES) {
-            out += ESCAPES[esc];
-          } else {
-            throw new LangError(`bad escape \\${esc}`);
-          }
-        } else {
-          out += text[pos++];
-        }
-      }
-      if (pos >= text.length) throw new LangError("unterminated string");
-      pos++; // closing quote
-      tokens.push({ kind: "string", value: out });
-      continue;
-    }
-    if ("=()[],@".includes(ch)) {
-      tokens.push({ kind: ch });
-      pos++;
-      continue;
-    }
-    const number = /^-?\d+(?:\.\d+)?/.exec(text.slice(pos));
-    if (number) {
-      const raw = number[0];
-      pos += raw.length;
-      tokens.push({ kind: "number", value: raw.includes(".") ? parseFloat(raw) : parseInt(raw, 10) });
-      continue;
-    }
-    if (IDENT_START.test(ch)) {
-      let end = pos + 1;
-      while (end < text.length && IDENT_PART.test(text[end])) end++;
-      tokens.push({ kind: "ident", value: text.slice(pos, end) });
-      pos = end;
-      continue;
-    }
-    throw new LangError(`unexpected character ${ch}`);
-  }
-  tokens.push({ kind: "eof" });
-  return tokens;
-}
-
-/* Split on newlines outside strings and brackets; strip `//` comments. */
-function splitStatements(text) {
-  const out = [];
-  let buffer = "";
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      buffer += ch;
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === "\"") inString = false;
-    } else if (ch === "\"") {
-      inString = true;
-      buffer += ch;
-    } else if (ch === "(" || ch === "[" || ch === "{") {
-      depth++;
-      buffer += ch;
-    } else if (ch === ")" || ch === "]" || ch === "}") {
-      depth = Math.max(0, depth - 1);
-      buffer += ch;
-    } else if (ch === "/" && text[i + 1] === "/") {
-      while (i < text.length && text[i] !== "\n" && text[i] !== "\r") i++;
-    } else if (ch === "\n" || ch === "\r") {
-      const statement = buffer.trim();
-      if (statement) out.push(statement);
-      buffer = "";
-    } else {
-      buffer += ch;
-    }
-  }
-  const last = buffer.trim();
-  if (last) out.push(last);
-  return out;
-}
-
-function tok(tokens, index) {
-  return tokens[index];
-}
-
-function parseProgram(text) {
-  const statements = new Map();
-  const errors = [];
-  for (const statement of splitStatements(text)) {
-    try {
-      const tokens = tokenize(statement);
-      let index = 0;
-      const head = tokens[index++];
-      if (head.kind !== "ident") throw new LangError("statement must start with a name");
-      if (tokens[index++].kind !== "=") throw new LangError("expected =");
-      const node = parseExpression(tokens, index).node;
-      if (tokens[index].kind !== "eof") throw new LangError("trailing tokens");
-      statements.set(head.value, node);
-    } catch (error) {
-      if (error instanceof LangError) {
-        errors.push(`${error.message} — in: ${statement}`);
-      } else {
-        throw error;
-      }
-    }
-  }
-  return { statements, errors };
-}
-
-/* Returns { node, index } — the index just past the parsed expression. */
-function parseExpression(tokens, start) {
-  let index = start;
-  const token = tokens[index++];
-  let action = false;
-  let current = token;
-  if (token.kind === "@") {
-    action = true;
-    current = tokens[index++];
-  }
-  if (current.kind === "string" || current.kind === "number") {
-    if (action) throw new LangError("literal cannot carry an action");
-    return { node: { node: "value", value: current.value }, index };
-  }
-  if (current.kind !== "ident") throw new LangError(`unexpected ${current.kind}`);
-  if (current.value === "true" || current.value === "false") {
-    if (action) throw new LangError("literal cannot carry an action");
-    return { node: { node: "value", value: current.value === "true" }, index };
-  }
-  if (current.value === "null") {
-    if (action) throw new LangError("literal cannot carry an action");
-    return { node: { node: "value", value: null }, index };
-  }
-  const open = tokens[index++];
-  if (open.kind !== "(") {
-    if (action) throw new LangError("@ must precede a call");
-    return { node: { node: "ref", name: current.value }, index };
-  }
-  const args = [];
-  const first = tokens[index];
-  if (first.kind === ")") {
-    index++;
-    return { node: { node: "call", name: current.value, action, args }, index };
-  }
-  while (true) {
-    const parsed = parseExpression(tokens, index);
-    args.push(parsed.node);
-    index = parsed.index;
-    const comma = tokens[index++];
-    if (comma.kind === ")") break;
-    if (comma.kind !== ",") throw new LangError("expected , or )");
-  }
-  return { node: { node: "call", name: current.value, action, args }, index };
-}
-
-/* ── 2. DOM rendering ───────────────────────────────────────────────────── */
+/* ── 1. Rendering ───────────────────────────────────────────────────────── */
 
 const COMPONENT_NAMES = new Set([
   "Root", "Stack", "Row", "Card", "ButtonRow", "Heading", "TextContent",
@@ -209,7 +30,7 @@ const COMPONENT_NAMES = new Set([
 const ALLOWED_ACTIONS = new Set(["Mount", "Unmount", "Eject", "Doctor",
                                  "Refresh", "ToAssistant"]);
 const ACTION_ROUTES = { Mount: "mount", Unmount: "unmount", Eject: "eject" };
-const ACTION_STATE_KEYS = { Mount: "mount", Unmount: "unmount", Eject: "eject" };
+const HEADINGS = { 1: "h1", 2: "h2", 3: "h3", 4: "h4" };
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -227,7 +48,7 @@ function container(className, children) {
 function literal(arg, fallback) {
   if (arg === undefined) return fallback;
   if (arg.node === "value") return arg.value;
-  throw new LangError("expected a literal");
+  throw new Lang.LangError("expected a literal");
 }
 
 function textProp(arg, fallback) {
@@ -241,10 +62,10 @@ function toneProp(arg, allowed, fallback) {
 
 function childrenProp(arg, ctx, depth) {
   if (!arg || arg.node !== "list") {
-    throw new LangError("children must be a list of references");
+    throw new Lang.LangError("children must be a list of references");
   }
-  return arg.args.map((item) => {
-    if (item.node !== "ref") throw new LangError("children must be references");
+  return arg.items.map((item) => {
+    if (item.node !== "ref") throw new Lang.LangError("children must be references");
     return resolve(item.name, ctx, depth + 1);
   });
 }
@@ -263,40 +84,32 @@ function actionOf(arg) {
 }
 
 function resolve(name, ctx, depth) {
-  if (depth > 32) throw new LangError("render depth exceeded");
+  if (depth > 32) throw new Lang.LangError("render depth exceeded");
   const node = ctx.statements.get(name);
-  if (!node) return el("div", "canvas__error", `missing component: ${name}`);
-  if (node.node === "value") {
-    return el("div", "canvas__error", "a literal is not a component");
-  }
-  if (node.node !== "call") {
-    return el("div", "canvas__error", `a statement of kind ${node.node} is not renderable`);
-  }
-  if (node.action) {
-    return el("div", "canvas__error", `unexpected action @${node.name}`);
-  }
+  if (!node) return el("div", "view__error", `missing component: ${name}`);
+  if (node.node === "value") return el("div", "view__error", "a literal is not a component");
+  if (node.node !== "call") return el("div", "view__error", "that statement is not renderable");
+  if (node.action) return el("div", "view__error", `unexpected action @${node.name}`);
   if (!COMPONENT_NAMES.has(node.name)) {
-    return el("div", "canvas__error", `unknown component ${node.name}`);
+    return el("div", "view__error", `unknown component ${node.name} — not shown`);
   }
   return BUILDERS[node.name](node.args, ctx, depth);
 }
 
-const HEADINGS = { 1: "h1", 2: "h2", 3: "h3", 4: "h4" };
-
 const BUILDERS = {
-  Root: (args, ctx, depth) => container("canvas__root", childrenProp(args[0], ctx, depth)),
-  Stack: (args, ctx, depth) => container("canvas__stack", childrenProp(args[0], ctx, depth)),
-  Row: (args, ctx, depth) => container("canvas__row", childrenProp(args[0], ctx, depth)),
-  Card: (args, ctx, depth) => container("canvas__card", childrenProp(args[0], ctx, depth)),
-  ButtonRow: (args, ctx, depth) => container("btnrow", childrenProp(args[0], ctx, depth)),
+  Root: (args, ctx, depth) => container("view", childrenProp(args[0], ctx, depth)),
+  Stack: (args, ctx, depth) => container("view__stack", childrenProp(args[0], ctx, depth)),
+  Row: (args, ctx, depth) => container("view__row", childrenProp(args[0], ctx, depth)),
+  Card: (args, ctx, depth) => container("view__card", childrenProp(args[0], ctx, depth)),
+  ButtonRow: (args, ctx, depth) => container("view__btnrow", childrenProp(args[0], ctx, depth)),
 
   Heading: (args) => {
     const level = literal(args[1], 2);
-    return el(HEADINGS[level] || "h2", "canvas__heading", textProp(args[0]));
+    return el(HEADINGS[level] || "h2", "view__heading", textProp(args[0]));
   },
   TextContent: (args) => {
     const tone = toneProp(args[1], ["default", "muted", "strong"], "default");
-    return el("p", `text text--${tone}`, textProp(args[0]));
+    return el("p", `view__text view__text--${tone}`, textProp(args[0]));
   },
   Badge: (args) => {
     const tone = toneProp(args[1], ["neutral", "ok", "warn", "danger"], "neutral");
@@ -304,25 +117,24 @@ const BUILDERS = {
   },
   Banner: (args) => {
     const tone = toneProp(args[1], ["info", "warning", "blocker"], "info");
-    return el("div", `canvas__banner canvas__banner--${tone}`, textProp(args[0]));
+    return el("div", `view__banner view__banner--${tone}`, textProp(args[0]));
   },
-  Empty: (args) => el("p", "text text--muted", textProp(args[0])),
-  Code: (args) => el("pre", "canvas__code", textProp(args[0])),
+  Empty: (args) => el("p", "view__text view__text--muted", textProp(args[0])),
+  Code: (args) => el("pre", "view__code", textProp(args[0])),
 
   VolumeCard: (args, ctx, depth) => {
-    const article = el("article", "canvas__card volume");
+    const article = el("article", "view__card volume");
     const head = el("div", "volume__head");
-    head.appendChild(el("span", "volume__label", textProp(args[0])));
+    head.appendChild(el("strong", "volume__label", textProp(args[0])));
+    head.appendChild(el("span", "volume__device", textProp(args[1])));
     head.appendChild(el("span", "volume__state", textProp(args[2])));
-    head.appendChild(el("span", "volume__state", textProp(args[3])));
+    head.appendChild(el("span", "volume__size", textProp(args[3])));
     article.appendChild(head);
-    article.appendChild(el("p", "volume__state", textProp(args[1])));
-    const body = container("canvas__stack", childrenProp(args[5], ctx, depth));
-    article.appendChild(body);
+    article.appendChild(container("view__stack", childrenProp(args[5], ctx, depth)));
     return article;
   },
   KeyValue: (args, ctx, depth) => {
-    const dl = el("dl");
+    const dl = el("dl", "view__kv");
     for (const child of childrenProp(args[0], ctx, depth)) dl.appendChild(child);
     return dl;
   },
@@ -339,39 +151,43 @@ const BUILDERS = {
   },
   ActivityItem: (args) => {
     const item = el("li", "activity__item");
-    item.appendChild(el("code", null, textProp(args[1])));
     const ok = literal(args[3], false);
-    item.appendChild(el("span", ok ? "ok" : "failed",
-                       ok ? " ✓" : " ✗"));
-    item.appendChild(el("span", null, ` ${textProp(args[0])} — ${textProp(args[2])}`));
+    item.appendChild(el("span", ok ? "activity__ok" : "activity__fail", ok ? "ok" : "failed"));
+    item.appendChild(el("code", null, textProp(args[1])));
+    item.appendChild(el("span", "activity__summary", textProp(args[2])));
+    item.appendChild(el("time", "activity__at", textProp(args[0])));
     return item;
   },
-  Suggestions: (args, ctx, depth) => container("canvas__row", childrenProp(args[0], ctx, depth)),
-  Button: (args) => actionButton(textProp(args[0]), args[1], ""),
+  Suggestions: (args, ctx, depth) =>
+    container("view__row view__suggestions", childrenProp(args[0], ctx, depth)),
+  Button: (args) => actionButton(textProp(args[0]), args[1], "view__cta"),
   Suggestion: (args) => actionButton(textProp(args[0]), args[1], "suggestion"),
 };
 
-/* ── 3. Actions ─────────────────────────────────────────────────────────── */
+/* ── 2. Actions: propose, then the human clicks ─────────────────────────── */
 
 function actionButton(label, actionArg, style) {
   const spec = actionOf(actionArg);
   const button = el("button", style, label);
-  if (!spec.valid) {
-    button.disabled = true;
-    button.title = spec.reason || "unsupported action";
-    return button;
-  }
-  const stateKey = ACTION_STATE_KEYS[spec.name];
+  if (!spec.valid) return disableButton(button, spec.reason);
+  const stateKey = ACTION_ROUTES[spec.name];
   if (stateKey) {
-    const volume = live.state ? live.state.volumeById.get(spec.args[0]) : null;
+    const volume = live.volumeById.get(spec.args[0]);
     const entry = volume && volume.actions && volume.actions[stateKey];
     if (!volume || !entry || !entry.enabled) {
-      button.disabled = true;
-      button.title = (entry && entry.reason) || "not available in the current state";
-      return button;
+      return disableButton(button,
+        (entry && entry.reason) || "not available in the current state");
     }
   }
   button.addEventListener("click", () => void dispatch(spec, button));
+  return button;
+}
+
+function disableButton(button, reason) {
+  button.disabled = true;
+  button.title = reason;
+  const note = el("span", "view__cta-reason", reason);
+  button.insertAdjacentElement("afterend", note);
   return button;
 }
 
@@ -385,10 +201,10 @@ async function dispatch(spec, button) {
     } else if (spec.name === "Doctor") {
       await run("run the doctor", { visible: false });
     } else if (spec.name === "Refresh") {
-      await run("show the volumes", { visible: false });
+      await run("show me the volumes", { visible: false });
     } else {
       const route = ACTION_ROUTES[spec.name];
-      const volume = live.state && live.state.volumeById.get(spec.args[0]);
+      const volume = live.volumeById.get(spec.args[0]);
       const response = await fetch(
         `/api/v1/volumes/${encodeURIComponent(spec.args[0])}/${route}`,
         {
@@ -399,120 +215,70 @@ async function dispatch(spec, button) {
                                  size: volume ? volume.size : null }),
         });
       const body = await response.json().catch(() => ({}));
-      if (response.ok) {
-        addMessage("agent",
-                   `${spec.name.toLowerCase()} ok — showing the fresh mount table.`,
-                   "action");
-      } else {
-        addMessage("error",
-                   body.error ? body.error.message : `request failed (${response.status})`);
+      if (!response.ok) {
+        showError(body.error ? body.error.message : `request failed (${response.status})`);
       }
-      await run("show the volumes", { visible: false });
+      await run("show me the volumes", { visible: false });
     }
   } catch (error) {
-    addMessage("error", `Connection problem: ${error}`);
+    showError(`That action could not run: ${error}`);
   } finally {
     busy.action = false;
+    void refreshActivity();
   }
 }
 
-/* ── 4. AG-UI over SSE + chat ───────────────────────────────────────────── */
+/* ── 3. Page state ──────────────────────────────────────────────────────── */
 
-const canvas = document.getElementById("canvas");
-const log = document.getElementById("log");
+const feed = document.getElementById("feed");
 const composer = document.getElementById("composer");
 const input = document.getElementById("input");
 const alertBox = document.getElementById("alert");
 const liveIndicator = document.getElementById("live");
-const generatorBadge = document.getElementById("generator-badge");
+const activityList = document.getElementById("activity-list");
+const activityCount = document.getElementById("activity-count");
 const threadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const history = [];
 const live = { volumeById: new Map() };
 const busy = { run: false, action: false };
-const pending = { narration: "", model: null, fallback: false, note: null };
+const pending = { narration: "", model: null, fallback: false, note: null,
+                  program: "", error: null };
 
 function setLive(state) { liveIndicator.dataset.live = state; }
-
-function addMessage(kind, text, meta) {
-  const bubble = el("div", `message message--${kind}`, text);
-  if (meta) bubble.appendChild(el("div", "message__meta", meta));
-  log.appendChild(bubble);
-  log.scrollTop = log.scrollHeight;
-}
 
 function showError(message) {
   alertBox.textContent = message;
   alertBox.hidden = false;
 }
 
-function metaLabel() {
-  if (pending.fallback) return pending.note || "deterministic fallback";
-  return pending.model ? `composed with ${pending.model}` : "composed from the live state";
+function scrollToFeedEnd() {
+  feed.lastElementChild && feed.lastElementChild.scrollIntoView(
+    { block: "end", behavior: "smooth" });
 }
 
-function render(programText) {
-  const parsed = parseProgram(programText);
-  if (!parsed.statements.has("root")) {
-    canvas.replaceChildren(container("canvas__root", [
-      el("p", "text text--muted", "The agent has not composed a view yet."),
-      parsed.errors.length ? el("pre", "canvas__error", parsed.errors.join("\n")) : null,
-    ].filter(Boolean)));
-    if (parsed.errors.length) console.warn("openui-lang parse errors", parsed.errors);
-    return;
-  }
-  try {
-    canvas.replaceChildren(resolve("root", { statements: parsed.statements }, 0));
-  } catch (error) {
-    const message = error instanceof LangError ? error.message : String(error);
-    console.warn("opui render failure", message);
-    canvas.replaceChildren(el("div", "canvas__error", `The agent's page failed to render: ${message}`));
-  }
-}
-
-function handleEvent(event) {
-  switch (event.type) {
-    case "RUN_STARTED":
-      pending.narration = "";
-      pending.model = null;
-      pending.fallback = false;
-      pending.note = null;
-      break;
-    case "STATE_SNAPSHOT":
-      live.state = event.snapshot;
-      live.volumeById = new Map(live.state.volumes.map((v) => [v.id, v]));
-      document.title = `ntfsmnt — ${live.state.host.readOnly ? "read-only" : "read-write"}`;
-      break;
-    case "TEXT_MESSAGE_CONTENT":
-      pending.narration += event.delta;
-      break;
-    case "CUSTOM":
-      if (event.name === "opui") render(event.value.lang);
-      if (event.name === "opui.meta") {
-        pending.fallback = Boolean(event.value.fallback);
-        pending.model = event.value.model || null;
-        pending.note = event.value.note || null;
-        generatorBadge.hidden = false;
-        generatorBadge.textContent = pending.fallback
-          ? "deterministic fallback"
-          : (pending.model ? `agent · ${pending.model}` : "agent");
-      }
-      break;
-    case "RUN_ERROR":
-      addMessage("error", event.message || "the run failed");
-      break;
-    default:
-      break; // Unknown event types are ignored by design.
-  }
-}
+/* ── 4. One run is one turn ─────────────────────────────────────────────── */
 
 async function run(text, options = {}) {
   if (busy.run) return;
   busy.run = true;
   setLive("busy");
+  alertBox.hidden = true;
+  pending.narration = "";
+  pending.program = "";
+  pending.model = null;
+  pending.fallback = false;
+  pending.note = null;
+  pending.error = null;
   composer.querySelector("button").disabled = true;
   try {
     history.push({ id: `u${history.length}`, role: "user", content: text });
-    if (options.visible !== false) addMessage("user", text);
+    const asked = options.visible !== false;
+    if (asked) {
+      const turn = el("div", "turn turn--user");
+      turn.appendChild(el("div", "bubble bubble--user", text));
+      feed.appendChild(turn);
+      scrollToFeedEnd();
+    }
     if (history.length > 40) history.splice(0, history.length - 40);
 
     const response = await fetch("/agent/run", {
@@ -524,11 +290,13 @@ async function run(text, options = {}) {
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      const detail = body.error ? body.error.message : String(response.status);
-      addMessage("error", `The agent refused that: ${detail}`);
+      const message = body.error ? body.error.message
+        : `request failed (${response.status})`;
+      pending.error = message;
       if (response.status === 401) {
         showError("Session lost — relaunch with `sudo ntfsmnt web`.");
       }
+      finishTurn(asked);
       return;
     }
 
@@ -544,21 +312,148 @@ async function run(text, options = {}) {
         const frame = buffer.slice(0, index);
         buffer = buffer.slice(index + 2);
         if (!frame.startsWith("data: ")) continue;
-        handleEvent(JSON.parse(frame.slice(6)));
+        try {
+          handleEvent(JSON.parse(frame.slice(6)));
+        } catch (error) {
+          console.warn("bad AG-UI frame", frame, error);
+        }
       }
     }
-    if (pending.narration.trim() || pending.note) {
-      addMessage("agent", pending.narration.trim() || "The model output was rejected; this is the deterministic view.", metaLabel());
-    }
+    finishTurn(asked);
     setLive("idle");
   } catch (error) {
-    addMessage("error", `Connection problem: ${error}`);
+    pending.error = `Connection problem: ${error}`;
+    finishTurn(true);
     setLive("reconnecting");
   } finally {
     busy.run = false;
     composer.querySelector("button").disabled = false;
+    void refreshActivity();
   }
 }
+
+function handleEvent(event) {
+  switch (event.type) {
+    case "RUN_STARTED":
+      pending.narration = "";
+      pending.program = "";
+      pending.model = null;
+      pending.fallback = false;
+      pending.note = null;
+      pending.error = null;
+      break;
+    case "STATE_SNAPSHOT":
+      live.state = event.snapshot;
+      live.volumeById = new Map((event.snapshot.volumes || []).map((v) => [v.id, v]));
+      break;
+    case "TEXT_MESSAGE_CONTENT":
+      pending.narration += event.delta;
+      break;
+    case "CUSTOM":
+      if (event.name === "opui") pending.program += event.value.lang;
+      if (event.name === "opui.meta") {
+        pending.fallback = Boolean(event.value.fallback);
+        pending.model = event.value.model || null;
+        pending.note = event.value.note || null;
+      }
+      break;
+    case "RUN_ERROR":
+      pending.error = event.message || "the run failed";
+      break;
+    default:
+      break; // Unknown event types are ignored by design.
+  }
+}
+
+function finishTurn(asked) {
+  const turn = el("article", "turn turn--agent");
+  if (pending.error) {
+    turn.appendChild(el("div", "bubble bubble--error", pending.error));
+    feed.appendChild(turn);
+    scrollToFeedEnd();
+    return;
+  }
+  if (!asked && !pending.program && !pending.narration) return;
+
+  const head = el("div", "turn__meta");
+  head.appendChild(el("span", "turn__label", asked ? "assistant" : "live view"));
+  head.appendChild(el("span", "badge", pending.fallback
+    ? (pending.note ? `deterministic fallback — ${pending.note}` : "deterministic fallback")
+    : pending.model ? `composed with ${pending.model}` : "composed from the live state"));
+  head.appendChild(el("time", "turn__time",
+    new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
+  turn.appendChild(head);
+
+  if (pending.narration) turn.appendChild(el("p", "turn__narration", pending.narration));
+  if (pending.program) turn.appendChild(renderProgram(pending.program));
+  feed.appendChild(turn);
+  scrollToFeedEnd();
+}
+
+function renderProgram(programText) {
+  const parsed = Lang.parseProgram(programText);
+  if (!parsed.statements.has("root")) {
+    console.warn("opui parse errors", parsed.errors);
+    return el("div", "view__error",
+      "The agent couldn't finish composing a view for that. Try asking again.");
+  }
+  if (parsed.errors.length) console.warn("opui parse errors", parsed.errors);
+  try {
+    return resolve("root", { statements: parsed.statements }, 0);
+  } catch (error) {
+    console.warn("opui render failure", error, programText);
+    return el("div", "view__error",
+      "That view didn't render — the console has the detail.");
+  }
+}
+
+/* ── 5. Activity: the server's log, always the source of truth ───────────── */
+
+async function refreshActivity() {
+  try {
+    const response = await fetch("/api/v1/activity", { credentials: "same-origin" });
+    if (!response.ok) return;
+    const body = await response.json();
+    renderActivity(body.entries || []);
+  } catch (error) {
+    console.warn("activity refresh failed", error);
+  }
+}
+
+function renderActivity(entries) {
+  activityList.replaceChildren();
+  activityCount.textContent = entries.length ? `(${entries.length})` : "";
+  if (!entries.length) {
+    activityList.appendChild(el("li", "activity__empty",
+      "No operations yet. Anything you run from here is recorded."));
+    return;
+  }
+  for (const entry of entries.slice(0, 20)) {
+    const item = el("li", `activity__item activity__item--${entry.ok ? "ok" : "fail"}`);
+    item.appendChild(el("span", entry.ok ? "activity__ok" : "activity__fail",
+      entry.ok ? "ok" : "failed"));
+    item.appendChild(el("code", null, entry.action));
+    if (entry.volume) item.appendChild(el("span", "activity__volume", entry.volume));
+    item.appendChild(el("span", "activity__summary", entry.summary));
+    const at = new Date(entry.at);
+    const stamp = el("time", "activity__at",
+      isNaN(at) ? entry.at
+        : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit",
+                                      second: "2-digit" }));
+    stamp.title = entry.at;
+    item.appendChild(stamp);
+    activityList.appendChild(item);
+  }
+}
+
+/* ── 6. Navigation + composer ───────────────────────────────────────────── */
+
+document.querySelectorAll("[data-ask]").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    if (busy.run) return;
+    void run(chip.dataset.ask, { visible: true });
+  });
+});
 
 composer.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -568,4 +463,17 @@ composer.addEventListener("submit", (event) => {
   void run(text, { visible: true });
 });
 
+input.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    composer.requestSubmit();
+  }
+});
+
+document.getElementById("activity-refresh").addEventListener("click", (event) => {
+  event.preventDefault();
+  void refreshActivity();
+});
+
+void refreshActivity();
 void run("show me the volumes", { visible: false });

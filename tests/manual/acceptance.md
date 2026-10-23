@@ -334,13 +334,17 @@ HD1 after the CLI acceptance above, from the same Full Disk Access terminal.
 
 ## Agent UI manual acceptance (same terminal)
 
-8. Open `/agent` from the dashboard link; it announces the volumes without
-   being asked; the badge reads "agent".
-9. "mount HD1" renders a VolumeCard with a Mount button; clicking it runs the
-   same flow as step 2; the narration never claims the mount happened before
-   you clicked.
-10. HTML in the composer (`<img src=x onerror=alert(1)>`) is echoed as text in
-    the canvas; nothing executes. A volume label containing `<` is also
-    rendered as text everywhere.
-11. `ntfsmnt mcp` answers `initialize`, `tools/list`, and `tools/call` for
+8. Open `/agent` from the dashboard link; a "live view" turn announces the
+   volumes without being asked; the masthead badge reads "agent".
+9. The nav chips start a turn each; typing *"mount HD1"* replies with a
+   VolumeCard and a Mount button; clicking it runs the same flow as step 2 and
+   then adds a fresh "live view" turn. The narration never claims the mount
+   happened before you clicked, and a disabled button shows its reason inline.
+10. HTML in the composer (`<img src=x onerror=alert(1)>`) appears as literal
+    text in your bubble and the reply; nothing executes. A volume label
+    containing `<` is rendered as text everywhere.
+11. The **Agent activity** drawer lists the operations just run (ok or failed,
+    action, volume, summary, local time) and *Refresh* re-reads it. A refused
+    action shows as failed, never as ok.
+12. `ntfsmnt mcp` answers `initialize`, `tools/list`, and `tools/call` for
     `list_volumes` on one JSON object per stdin line; no tool mutates.

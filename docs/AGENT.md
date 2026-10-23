@@ -10,11 +10,20 @@ When the dashboard is running (`sudo ntfsmnt web`), the agent page is at
 menu-bar app opens.
 
 - Type what you want: *"mount HD1"*, *"run the doctor"*, *"what can you do?"*.
+  The nav chips at the top send those prompts for you; *Classic dashboard*
+  goes back to the form-based page.
 - The agent reads the live mount table and composes the page as **OpenUI
-  Lang**, streamed over SSE as **AG-UI** events.
+  Lang**, streamed over SSE as **AG-UI** events. Each reply is a turn in the
+  conversation, and the turn *is* the interface: the volume cards, banners,
+  and buttons render inside it, with the agent's narration above.
 - Buttons it generates call the same authenticated routes the classic page
   uses. The agent never executes a mount itself — you click, the classic
-  guards run (token cookie, `X-NTFSMNT`, Origin, single operation lock).
+  guards run (token cookie, `X-NTFSMNT`, Origin, single operation lock). A
+  refused action keeps its reason visible on the button.
+- **Agent activity** (collapsed at the bottom) lists what actually ran —
+  mount, unmount, eject, doctor — from the server's activity log, with ok or
+  failed, the volume, and the time. It refreshes after every turn and action;
+  *Refresh* re-reads it on demand.
 - Destructive options (`--recover`, `--remove-hiberfile`) are not exposed here;
   use the classic dashboard for those.
 
