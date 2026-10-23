@@ -31,10 +31,11 @@ from ntfsmnt.volumes import Volume
 
 PROBE_FILENAME = ".ntfsmnt-probe"
 DEVICE_WAIT_ATTEMPTS = 10
-#: Apple's FSKit mount releases the device asynchronously. FUSE-T's NFS mount
-#: helper fails instantly (mount_nfs exit 66) when it races that teardown, so
-#: the proven probe lets the device settle before starting ntfs-3g.
-SETTLE_SECONDS = 3
+#: How long each quiet window is before ntfs-3g starts. FSKit can put Apple's
+#: read-only mount back after the first eviction, so the mounter re-checks for a
+#: remount instead of trusting a single unmount. (The exit-66 failures were a
+#: different bug: FSKit deletes the mount-point directory, recreated in step 4c.)
+SETTLE_SECONDS = 8
 #: How many clean settle windows to try when macOS keeps remounting read-only.
 SETTLE_ATTEMPTS = 3
 
@@ -199,10 +200,9 @@ def _settled_clear(
 ) -> bool:
     """Wait for a clean settle window, evicting a read-only remount if it lands.
 
-    FUSE-T's NFS mount helper fails immediately (mount_nfs exit 66) when it
-    starts while Apple's FSKit mount is still being torn down, so ntfs-3g must
-    only start after ``SETTLE_SECONDS`` with nothing mounted at the device or
-    the path. Returns whether such a window was found.
+    FSKit can put Apple's read-only mount back after the first eviction, so
+    ntfs-3g only starts after ``SETTLE_SECONDS`` with nothing mounted at the
+    device or the path. Returns whether such a window was found.
     """
     for _ in range(SETTLE_ATTEMPTS):
         sleep(SETTLE_SECONDS)
@@ -327,13 +327,6 @@ def mount_volume(
             f"{holder} — unmount it before mounting this one"
         )
 
-    try:
-        _ensure_mount_point(mount_point)
-    except OSError as exc:
-        raise MountFailed(
-            f"Could not create mount point {mount_point}: {exc.strerror or exc}"
-        ) from exc
-
     # 3. Evict Apple's read-only mount of this device, or Apple's mount at the
     # mount point. From the first eviction on, every exit must restore Apple's
     # mount — including an interrupt, so the sequence is guarded by
@@ -352,10 +345,9 @@ def mount_volume(
                 run=run,
             )
 
-        # 4b. FSKit releases the device asynchronously. Starting ntfs-3g while
-        # that teardown is still in flight makes FUSE-T's NFS mount helper fail
-        # immediately (mount_nfs exit 66), so only start after a settle window
-        # with nothing mounted at the device or the path.
+        # 4b. FSKit can remount Apple's volume while its teardown is in flight,
+        # so only start after a settle window with nothing mounted at the
+        # device or the path.
         if not _settled_clear(
             device.device,
             mount_point,
@@ -367,6 +359,21 @@ def mount_volume(
                 f"{device.label} is still mounted read-only at {mount_point} "
                 "and macOS keeps remounting it, so the read-write mount could "
                 "not start.",
+                device_path=device.device,
+                mount_point=mount_point,
+                mounts=mounts,
+                run=run,
+            )
+
+        # 4c. Unmounting Apple's FSKit volume also deletes the mount-point
+        # directory, so the path is gone by the time we get here. Recreate it
+        # immediately before ntfs-3g starts: FUSE-T's NFS mount helper fails
+        # with mount_nfs exit 66 when the mount point vanishes underneath it.
+        try:
+            _ensure_mount_point(mount_point)
+        except OSError as exc:
+            _fail(
+                f"Could not create mount point {mount_point}: {exc.strerror or exc}",
                 device_path=device.device,
                 mount_point=mount_point,
                 mounts=mounts,

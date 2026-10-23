@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 from subprocess import CalledProcessError
 
 import pytest
@@ -671,6 +672,37 @@ def test_remounts_and_evicts_apple_after_rw(fake_env, mount_point_dirs):
     assert fake_env.write_probe_called
     assert fake_env.state("HD1") == "rw"
     assert result.pid == 4242
+
+
+def test_recreates_the_mount_point_after_apple_unmount(fake_env, monkeypatch, tmp_path):
+    """FSKit deletes the mount-point directory when it unmounts the volume."""
+    point = tmp_path / "HD1"
+    point.mkdir()
+    monkeypatch.setattr(
+        mounter,
+        "_ensure_mount_point",
+        lambda path: Path(path).mkdir(parents=True, exist_ok=True),
+    )
+
+    original_run = fake_env.run
+    unmounted = []
+
+    def run(argv):
+        if argv[:2] == ["diskutil", "unmount"] and point.exists():
+            point.rmdir()  # FSKit removes the directory too, not just the mount
+            unmounted.append(argv[2])
+        if argv[0] == NTFS3G:
+            assert point.is_dir(), "ntfs-3g started with the mount point deleted"
+        return original_run(argv)
+
+    fake_env.run = run
+    fake_env.probe = lambda mount_point: None
+
+    result = fake_env.mount(state="ro", mount_point=str(point))
+
+    assert unmounted, "the Apple unmount never ran, so the race was not exercised"
+    assert result.mount_point == str(point)
+    assert fake_env.state("HD1") == "rw"
 
 
 def test_failure_restores_read_only(fake_env):
