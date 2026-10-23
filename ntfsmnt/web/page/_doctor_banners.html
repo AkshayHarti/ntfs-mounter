@@ -1,0 +1,20 @@
+<div id="doctor-banners"{% if oob %} hx-swap-oob="true"{% endif %}>
+{% if state.doctor.findings %}
+<section class="banner banner--{{ 'blocker' if state.doctor.status == 'blocker' else 'warning' }}"
+         role="{{ 'alert' if state.doctor.status == 'blocker' else 'status' }}"
+         aria-label="Host checks">
+  <ul class="findings">
+    {% for finding in state.doctor.findings %}
+    <li class="finding">
+      <strong class="finding__check">{{ finding.check }}</strong>
+      <span class="finding__message">{{ finding.message }}</span>
+      {% if finding.fix %}
+      <span class="finding__fix">{{ finding.fix }}</span>
+      <button type="button" class="copy" data-copy="{{ finding.fix }}">Copy</button>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+</div>

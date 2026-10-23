@@ -1,0 +1,42 @@
+<section class="activity"
+         aria-labelledby="activity-heading"
+         data-activity-for="{{ volume.label }}">
+  <div class="activity__head">
+    <h3 class="activity__heading" id="activity-heading">Activity</h3>
+    <div class="activity__filters" role="group" aria-label="Filter activity">
+      <button type="button"
+              class="activity__filter is-active"
+              data-activity-filter="volume"
+              aria-pressed="true">This volume</button>
+      <button type="button"
+              class="activity__filter"
+              data-activity-filter="all"
+              aria-pressed="false">All</button>
+    </div>
+  </div>
+  {% if activity %}
+  <ol class="log">
+    {% for entry in activity %}
+    <li class="log__row{% if not entry.ok %} is-failure{% endif %}"
+        data-activity-id="{{ entry.id }}"
+        data-activity-at="{{ entry.at }}"
+        data-activity-volume="{{ entry.volume }}">
+      <time class="log__time" datetime="{{ entry.at }}">{{ entry.at }}</time>
+      <span class="log__action">{{ entry.action }}</span>
+      <span class="log__volume">{{ entry.volume }}</span>
+      <span class="log__outcome">{{ "ok" if entry.ok else "failed" }}</span>
+      <span class="log__summary">{{ entry.summary }}</span>
+      {% if entry.detail %}
+      <details class="log__detail">
+        <summary>Details</summary>
+        <pre>{{ entry.detail }}</pre>
+      </details>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty empty--quiet">No activity for this volume yet.</p>
+  {% endif %}
+  <p class="empty" data-activity-filter-empty hidden>No activity for this volume yet.</p>
+</section>

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ntfsmnt</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead__identity">
+      <h1 class="wordmark">ntfsmnt</h1>
+      {% if state.host.root and not state.host.read_only %}
+      <span class="badge badge--root">root</span>
+      {% else %}
+      <span class="badge badge--readonly">read-only</span>
+      {% endif %}
+    </div>
+    {% include "_doctor_status.html" %}
+    <span class="live" id="live" data-live="connecting">live</span>
+  </header>
+
+  {% if state.host.read_only %}
+  <section class="banner banner--warning" role="status">
+    <p>Read-only mode &mdash; restart with <code>sudo ntfsmnt web</code> to enable actions.</p>
+  </section>
+  {% endif %}
+
+  {% include "_doctor_banners.html" %}
+
+  <div id="alert" role="alert" class="alert">{% if error %}<p class="alert__message">{{ error.message }}</p>{% if error.next_step %}<p class="alert__next">{{ error.next_step }}</p>{% endif %}{% endif %}</div>
+
+  <main id="app">
+    {% include "_region.html" %}
+  </main>
+
+  <div id="activity-live" aria-live="polite" class="sr-only"></div>
+
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

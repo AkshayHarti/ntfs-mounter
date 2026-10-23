@@ -1,0 +1,27 @@
+{%- set chip_copy = {"rw": "writable", "ro": "read-only", "unmounted": "unmounted", "error": "error"} -%}
+<nav id="volume-list" class="volume-list" aria-label="NTFS volumes">
+  {% if state.volumes %}
+  <ul class="volume-items" role="list">
+    {% for v in state.volumes %}
+    <li class="volume-item">
+      <button type="button"
+              class="volume-row{% if v.id == selected %} is-selected{% endif %}"
+              data-id="{{ v.id }}"
+              data-state="{{ v.state }}"
+              {%- if v.id == selected %} aria-current="true"{% endif %}>
+        <span class="volume-row__top">
+          <span class="volume-row__label">{{ v.label or "Untitled volume" }}</span>
+          <span class="chip chip--{{ v.state }}">{{ chip_copy.get(v.state, v.state) }}</span>
+        </span>
+        <span class="volume-row__meta">
+          <span class="volume-row__device">{{ v.device }}</span>
+          {% if v.mount_point %}<span class="volume-row__mount">{{ v.mount_point }}</span>{% endif %}
+        </span>
+      </button>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">No NTFS volumes detected. Connect a drive and it appears here.</p>
+  {% endif %}
+</nav>

@@ -1,0 +1,9 @@
+<p id="doctor-status" class="doctor-line doctor-line--{{ state.doctor.status }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {%- if state.doctor.status == "ok" -%}
+  doctor &check;
+  {%- else -%}
+  {%- set count = state.doctor.findings | length -%}
+  doctor: {{ count }} {{ state.doctor.status }}{{ "" if count == 1 else "s" }}
+  {% endif %}
+  <a class="recheck" href="/">Re-check</a>
+</p>
