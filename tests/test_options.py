@@ -78,6 +78,20 @@ def test_classify_success_without_a_mount_without_a_timeout():
     assert "exit code 0" not in msg
 
 
+def test_classify_success_keeps_the_nfs_helper_message():
+    # FUSE-T's mount helper fails after the ntfs-3g parent has already exited 0,
+    # so its stderr is the only account of why the mount never appeared.
+    stderr = (
+        "Version 2022.10.3\n"
+        "mount_nfs: can't mount /HD1 from fuse-t onto /Volumes/HD1: "
+        "Directory not empty\n"
+    )
+    msg = classify_mount_failure(returncode=0, stderr=stderr, timeout=30)
+
+    assert "did not appear within 30 seconds" in msg
+    assert "Directory not empty" in msg
+
+
 def test_classify_busy_unclean_and_generic():
     busy = classify_mount_failure(returncode=16, stderr="Resource busy")
     assert "mounted" in busy or "open" in busy

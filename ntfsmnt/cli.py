@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Sequence
 
@@ -39,12 +40,29 @@ HEADERS = ("DEVICE", "LABEL", "SIZE", "STATE", "MOUNT")
 
 
 def real_run(argv: list[str]) -> tuple[int, str]:
-    """Run a command the way every injected runner does: never raise."""
+    """Run a command the way every injected runner does: never raise.
+
+    Output goes to a temporary file rather than a pipe, and stdin is closed.
+    ntfs-3g spawns the FUSE-T NFS server before it daemonises, so a pipe would
+    stay open in that long-lived child and a captured run could block after a
+    successful mount. A file matches the proven root probe's log-file stdio and
+    still leaves the output available for failure classification.
+    """
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True)
+        with tempfile.TemporaryFile(
+            mode="w+", encoding="utf-8", errors="replace"
+        ) as out:
+            proc = subprocess.run(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            out.seek(0)
+            return (proc.returncode, out.read())
     except OSError as exc:
         return (127, str(exc))
-    return (proc.returncode, (proc.stdout or "") + (proc.stderr or ""))
 
 
 def _discover() -> list[Volume]:

@@ -1,6 +1,8 @@
 import json
 import re
 import subprocess
+import sys
+import time
 
 import pytest
 
@@ -704,3 +706,20 @@ def test_real_run_never_raises(monkeypatch):
     rc, output = ntfsmnt.cli.real_run(["definitely-not-a-binary"])
     assert rc == 127
     assert "no such binary" in output
+
+
+def test_real_run_does_not_wait_for_a_grandchild_holding_stdout():
+    # ntfs-3g spawns the long-lived FUSE-T server before it daemonises. If that
+    # child inherits a pipe, communicate() blocks until the mount goes away, so
+    # a successful mount would look like a hang. A file for stdio keeps the
+    # runner prompt; this reproduces the inheritance without ntfs-3g.
+    code = (
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'])\n"
+    )
+    started = time.monotonic()
+    rc, _ = ntfsmnt.cli.real_run([sys.executable, "-c", code])
+    elapsed = time.monotonic() - started
+
+    assert rc == 0
+    assert elapsed < 2.0

@@ -25,18 +25,35 @@ def build_mount_args(
     return [NTFS3G_BIN, device, mount_point, "-o", options]
 
 
+def _failure_detail(stderr: str) -> str:
+    """The most useful line from ntfs-3g/FUSE-T output, if there is one."""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    for line in lines:
+        lowered = line.lower()
+        if any(
+            word in lowered
+            for word in ("can't mount", "cannot mount", "failed", "error", "not empty")
+        ):
+            return line[:300]
+    return lines[-1][:300] if lines else ""
+
+
 def classify_mount_failure(
     *, returncode: int, stderr: str, timeout: int | None = None
 ) -> str:
+    detail = _failure_detail(stderr)
     if returncode == 0:
         # ntfs-3g exited cleanly, so "failed (exit code 0)" would be a lie: the
-        # mount simply never appeared in the table.
+        # mount simply never appeared in the table. FUSE-T's NFS helper fails
+        # after the parent exits, so its own message is the only clue we get.
         if timeout is None:
-            return "ntfs-3g exited successfully but the mount did not appear."
-        return (
-            "ntfs-3g exited successfully but the mount did not appear "
-            f"within {timeout} seconds."
-        )
+            message = "ntfs-3g exited successfully but the mount did not appear."
+        else:
+            message = (
+                "ntfs-3g exited successfully but the mount did not appear "
+                f"within {timeout} seconds."
+            )
+        return f"{message} {detail}".strip()
     text = stderr.lower()
     # Specific, actionable causes first: ntfs-3g reports hibernated and dirty
     # volumes with a trailing "Operation not permitted", so EPERM alone must not
