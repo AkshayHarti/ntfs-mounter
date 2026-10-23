@@ -109,6 +109,15 @@ def test_check_probes_the_full_start_argv() -> None:
     assert 'sudo -n -l "$CLI_BIN" web --port 0 --owner' in code
 
 
+def test_check_does_not_fail_on_an_unreadable_rule() -> None:
+    # 0440 root:wheel is unreadable by the user running --check, which is the
+    # normal case. The sudo -n -l probe is authoritative there.
+    body = _function("run_check")
+    assert "[[ ! -r $SUDOERS_FILE ]]" in body
+    assert "is not readable as this user" in body
+    assert "owned by root:wheel" in body
+
+
 def test_visudo_is_required_before_touching_anything() -> None:
     body = _function("install_cli")
     assert body.index("have visudo") < body.index("rm -rf")

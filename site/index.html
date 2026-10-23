@@ -32,7 +32,7 @@
 <section id="install" class="hero">
   <h1>Read-write NTFS on macOS, from the command line.</h1>
   <p class="lede">ntfsmnt replaces Apple&rsquo;s read-only NTFS mount for one volume at a time with an ntfs-3g mount served by FUSE-T: no kernel extension, no SIP change, no reboot.</p>
-  <p class="evidence">335 tests &middot; MIT licence &middot; Python &ge; 3.12 &middot; macOS only, verified on Apple Silicon (macOS 26.5.2)</p>
+  <p class="evidence">339 tests &middot; MIT licence &middot; Python &ge; 3.12 &middot; macOS only, verified on Apple Silicon (macOS 26.5.2)</p>
 
   <div class="install">
     <article class="option">
@@ -150,7 +150,7 @@
   <pre><code>uv sync --extra web
 uv run pytest -q</code></pre>
 
-  <p>That is 335 tests. The important ones use the injected-runner pattern: every subprocess effect goes through an injected callable (<code>run</code>, <code>read_mount_table</code>, <code>sleep</code>, the write probe), so the full mount and unmount sequences run without touching <code>/Volumes</code>. The npm proxy has its own <code>node:test</code> suite, run by CI.</p>
+  <p>That is 339 tests. The important ones use the injected-runner pattern: every subprocess effect goes through an injected callable (<code>run</code>, <code>read_mount_table</code>, <code>sleep</code>, the write probe), so the full mount and unmount sequences run without touching <code>/Volumes</code>. The npm proxy has its own <code>node:test</code> suite, run by CI.</p>
 
   <p>The safety invariants and the web-layer invariants live in <a href="https://github.com/AkshayHarti/ntfs-mounter/blob/main/AGENTS.md">AGENTS.md</a>. A good change adds tests in that injected-runner style and keeps the <a href="https://github.com/AkshayHarti/ntfs-mounter/blob/main/README.md">README</a> and AGENTS.md honest about what is verified and what is not.</p>
 
