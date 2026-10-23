@@ -1,0 +1,63 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - name: Assert tag matches package version
+        run: |
+          VERSION="$(python3 - <<'PY'
+          import ast
+          import pathlib
+
+          tree = ast.parse(pathlib.Path("ntfsmnt/__init__.py").read_text(encoding="utf-8"))
+          for node in tree.body:
+              if isinstance(node, ast.Assign) and any(
+                  getattr(target, "id", None) == "__version__" for target in node.targets
+              ):
+                  print(ast.literal_eval(node.value))
+                  break
+          else:
+              raise SystemExit("__version__ not found in ntfsmnt/__init__.py")
+          PY
+          )"
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package version v$VERSION"
+            exit 1
+          fi
+          test -f "dist/ntfsmnt-$VERSION.tar.gz"
+          test -f "dist/ntfsmnt-$VERSION-py3-none-any.whl"
+          echo "tag $GITHUB_REF_NAME matches package version v$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

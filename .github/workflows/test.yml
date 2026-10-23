@@ -12,3 +12,17 @@ jobs:
       - run: uv sync --group dev --extra web
       - run: uv run pytest -q
       - run: node --check ntfsmnt/web/page/app.js
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install uv
+      - run: uv build
+      - name: Wheel smoke test in a clean venv
+        run: |
+          python -m venv /tmp/ntfsmnt-smoke
+          /tmp/ntfsmnt-smoke/bin/pip install dist/*.whl
+          /tmp/ntfsmnt-smoke/bin/ntfsmnt --help
