@@ -2,9 +2,11 @@ import platform
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from ntfsmnt import paths
+
 FUSE_T_LIB = "/usr/local/lib/libfuse-t.dylib"
-NTFS_3G = "/usr/local/bin/ntfs-3g"
-NTFS_3G_PROBE = "/usr/local/bin/ntfs-3g.probe"
+NTFS_3G = paths.NTFS3G
+NTFS_3G_PROBE = paths.NTFS3G_PROBE
 
 HARD_CHECK_NAMES = frozenset({"fuse-t", "ntfs-3g", "root", "device-access"})
 
@@ -47,19 +49,33 @@ def _check_fuse_t(env: Env) -> Check:
 
 
 def _check_ntfs_3g(env: Env) -> Check:
+    brew_leg = "brew tap AkshayHarti/ntfs-mounter https://github.com/AkshayHarti/ntfs-mounter && brew install AkshayHarti/ntfs-mounter/ntfs-3g-fuse-t"
     if not env.path_exists(NTFS_3G):
-        return Check(
-            "ntfs-3g",
-            False,
-            f"{NTFS_3G} not found",
-            f"Rebuild ntfs-3g from macos-fuse-t/ntfs-3g and install it at {NTFS_3G}",
-        )
+        if NTFS_3G.startswith("/opt/homebrew"):
+            fix = f"{brew_leg}, or run ./scripts/setup.sh from a checkout"
+        else:
+            fix = (
+                "Run ./scripts/setup.sh from a checkout to build ntfs-3g from "
+                f"macos-fuse-t/ntfs-3g, then install it at {NTFS_3G}"
+            )
+        return Check("ntfs-3g", False, f"{NTFS_3G} not found", fix)
     if "libfuse-t" not in env.linkage(NTFS_3G):
+        if NTFS_3G.startswith("/opt/homebrew"):
+            fix = (
+                f"{NTFS_3G} is Homebrew's macFUSE-linked ntfs-3g-mac. "
+                f"{brew_leg} (uninstall ntfs-3g-mac first), or build to "
+                "/usr/local/bin with ./scripts/setup.sh"
+            )
+        else:
+            fix = (
+                "Rebuild ntfs-3g from macos-fuse-t/ntfs-3g so it links "
+                "against libfuse-t"
+            )
         return Check(
             "ntfs-3g",
             False,
             "ntfs-3g is not linked against FUSE-T",
-            "Rebuild ntfs-3g from macos-fuse-t/ntfs-3g so it links against libfuse-t",
+            fix,
         )
     return Check("ntfs-3g", True, "ntfs-3g links against libfuse-t")
 
