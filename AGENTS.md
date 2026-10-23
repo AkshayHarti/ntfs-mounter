@@ -13,7 +13,7 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 ## Commands
 
 - Install deps: `uv sync` (add `--extra web` for the browser UI and its tests)
-- Test: `uv run pytest -q` (341 tests; without `--extra web` the FastAPI/Jinja
+- Test: `uv run pytest -q` (395 tests; without `--extra web` the FastAPI/Jinja
   API, page, and schema tests skip, while the service, models, and config tests
   run)
 - Prerequisite check: `./scripts/setup.sh --check` (read-only, exits 0 anywhere)
@@ -37,6 +37,9 @@ ntfsmnt/
   __init__.py      package marker
   __main__.py      python -m ntfsmnt entry point
   cli.py           argument parsing, command dispatch, JSON rendering
+  mcp.py           read-only MCP server over stdio (`ntfsmnt mcp`)
+  agent/           agentic UI core: OpenUI Lang parser/validator, AG-UI
+                   events, optional LLM adapter, deterministic planner
   diskutil.py      plist parsing for diskutil list/info
   mounttable.py    parsing of `mount` output, including fuse-t: lines
   identity.py      corroborate a fuse-t: mount with its serving ntfs-3g process
@@ -57,6 +60,7 @@ ntfsmnt/
     schemas.py     pydantic models for JSON responses and requests
     models.py      frozen dataclasses shared by service and schemas
     page/          index.html + fragments, app.css, app.js, vendored htmx
+                   agent.html + agent.js + agent.css (the agentic surface)
 
 tests/
   test_*.py        unit tests with injected runners
@@ -121,9 +125,14 @@ docs/
 - `privileged.py` — the only root-escalation path; `os.execvp` through `sudo`.
 - `cli.py` — ties it together; resolves volume *before* privilege escalation,
   confirms destructive flags *before* escalation.
-- `web/app.py` — the HTTP surface: token→cookie exchange, the session/`X-NTFSMNT`/
-  Origin boundary, state and action routes, the SSE stream, and the loopback
-  host plus response-header middleware.
+- `web/app.py` — the HTTP surface: token→cookie exchange, the session/
+  `X-NTFSMNT`/Origin boundary, state and action routes, the SSE stream, and
+  the loopback host plus response-header middleware.
+- `web/auth.py` — the shared auth boundary (session cookie, mutation header,
+  Origin) used by both pages.
+- `web/agent.py` — the `/agent` routes: page, component library, and the
+  AG-UI SSE run stream. It can refresh the doctor and propose actions; it
+  never mounts, unmounts, or ejects.
 - `web/service.py` — takes the same snapshot the CLI prints, decides which
   actions are enabled with the same predicates, and runs the CLI's
   `mounter`/`unmounter` calls under a single operation lock.
@@ -232,6 +241,22 @@ a prompt. Do not weaken these.
 6. **The app's `SIGKILL` is for its own server child only**, after `SIGTERM`
    and a 5 s wait. It must never target a mount, `ntfs-3g`, or any disk-related
    process; invariant 3 above still forbids `kill -9` there.
+
+## AI-native surfaces
+
+- `/agent` — the agentic UI. The agent composes OpenUI Lang from the fixed
+  registry in `ntfsmnt/agent/library.py`, streamed over SSE as AG-UI events
+  (`ntfsmnt/agent/events.py`, `ntfsmnt/web/agent.py`); the renderer is
+  `ntfsmnt/web/page/agent.js`. Default planner is deterministic; `--agent-llm`
+  enables an OpenAI-compatible model (validated output, deterministic
+  fallback). The agent layer never mounts, unmounts, or ejects: generated
+  buttons call the existing authenticated routes. Do not add an execution
+  path to the agent, and do not render generated strings with `innerHTML`.
+- `ntfsmnt mcp` — read-only MCP server on stdio (`ntfsmnt/mcp.py`). Its tools
+  are `list_volumes`, `get_status`, `run_doctor`; there is deliberately no
+  mount tool. Keep it that way.
+- `site/llms.txt` — the agent-facing index of the docs.
+- `docs/AGENT.md` — user-facing doc for both surfaces.
 
 ## Conventions
 

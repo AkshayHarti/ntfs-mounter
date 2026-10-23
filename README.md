@@ -412,6 +412,27 @@ after it exits. The CLI remains the source of truth — the page calls the same
 mount, unmount, and eject code, and `ntfsmnt list` is always the authoritative
 view of the current state regardless of what a stale page shows.
 
+### The agentic dashboard (`/agent`)
+
+Next to the classic page, `/agent` is an agentic-first surface: describe what
+you want ("mount HD1", "run the doctor", "what can you do?") and the agent
+reads the live mount table and composes the page as **OpenUI Lang**, streamed
+over SSE as **AG-UI** events.
+
+- The agent proposes; you confirm. Generated buttons call the same guarded
+  routes as the classic page — the agent itself never performs a disk
+  operation.
+- The planner is deterministic by default. `--agent-llm <openai-compatible
+  base url> [--agent-model NAME]` lets a model compose the interface from the
+  same closed component registry; invalid output falls back to the
+  deterministic page with a visible badge.
+- Destructive options (`--recover`, `--remove-hiberfile`) stay on the classic
+  dashboard.
+
+`ntfsmnt mcp` runs a **read-only** MCP server on stdio (`list_volumes`,
+`get_status`, `run_doctor`) so AI clients can inspect volumes without any way
+to change them. See `docs/AGENT.md`.
+
 ## Menu-bar app
 
 `scripts/install-app.sh` builds and installs `ntfsmnt.app` (unsigned), then the
@@ -726,7 +747,7 @@ uv run pytest -q
 
 Without `--extra web` the FastAPI/Jinja API, page, and schema tests skip; the
 service, models, and config tests still run.
-The suite has 341 tests and never touches hardware. Subprocess effects
+The suite has 395 tests and never touches hardware. Subprocess effects
 (`diskutil`, `ntfs-3g`, `mount`, `pgrep`, `kill`, `sleep`) are injected as
 callables, and the mount-point creation, write probe, and ownership `stat` are
 monkeypatched in tests that exercise the orchestration.

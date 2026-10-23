@@ -201,7 +201,13 @@ def _build_parser() -> argparse.ArgumentParser:
     web.add_argument("--port", type=int, default=0)
     web.add_argument("--open", action="store_true")
     web.add_argument("--owner", default=None, metavar="UID:GID")
+    web.add_argument("--agent-llm", default=None, metavar="URL",
+                     help="optional OpenAI-compatible endpoint for the agent UI "
+                          "(e.g. http://127.0.0.1:11434 for Ollama)")
+    web.add_argument("--agent-model", default="gpt-4o-mini", metavar="MODEL",
+                     help="model name used with --agent-llm")
 
+    sub.add_parser("mcp", help="read-only MCP server on stdio (list, status, doctor)")
     return parser
 
 
@@ -386,6 +392,7 @@ def _cmd_web(args: argparse.Namespace, collector: Callable[[], list[Volume]]) ->
         settings = settings_from(
             port=args.port, owner=args.owner, environ=os.environ,
             euid=os.geteuid(), open_browser=args.open,
+            agent_llm=args.agent_llm, agent_model=args.agent_model,
         )
     except ValueError as exc:
         print(f"ntfsmnt: {exc}", file=sys.stderr)
@@ -403,6 +410,14 @@ def _cmd_web(args: argparse.Namespace, collector: Callable[[], list[Volume]]) ->
     return 0
 
 
+def _cmd_mcp(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
+    # The agent surface stays read-only: importing here keeps `ntfsmnt mcp`
+    # from depending on the web extra, and the tools list has no mount verb.
+    from ntfsmnt.mcp import serve
+
+    return serve(sys.stdin, sys.stdout)
+
+
 COMMANDS = {
     "list": _cmd_list,
     "status": _cmd_status,
@@ -411,6 +426,7 @@ COMMANDS = {
     "unmount": _cmd_unmount,
     "eject": _cmd_eject,
     "web": _cmd_web,
+    "mcp": _cmd_mcp,
 }
 
 

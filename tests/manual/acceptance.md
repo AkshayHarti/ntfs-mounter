@@ -331,3 +331,16 @@ HD1 after the CLI acceptance above, from the same Full Disk Access terminal.
 5. Guarded action on a hibernated volume: wrong label keeps Confirm disabled and a hand-crafted POST is rejected; correct label mounts with hiberfile removal.
 6. Non-root launch: banner shows, buttons disabled, POST returns 403.
 7. Close the tab; the service keeps running until `Ctrl-C` and then exits cleanly.
+
+## Agent UI manual acceptance (same terminal)
+
+8. Open `/agent` from the dashboard link; it announces the volumes without
+   being asked; the badge reads "agent".
+9. "mount HD1" renders a VolumeCard with a Mount button; clicking it runs the
+   same flow as step 2; the narration never claims the mount happened before
+   you clicked.
+10. HTML in the composer (`<img src=x onerror=alert(1)>`) is echoed as text in
+    the canvas; nothing executes. A volume label containing `<` is also
+    rendered as text everywhere.
+11. `ntfsmnt mcp` answers `initialize`, `tools/list`, and `tools/call` for
+    `list_volumes` on one JSON object per stdin line; no tool mutates.

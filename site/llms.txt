@@ -1,0 +1,19 @@
+# ntfsmnt
+
+> Mount NTFS volumes read-write on macOS via FUSE-T and ntfs-3g. A stdlib-only
+> Python CLI with a local web dashboard, a menu-bar app, and read-only AI
+> surfaces. MIT, macOS only, Python ≥ 3.12.
+
+The authoritative docs for people and for agents:
+
+- `AGENTS.md` — repo rules, invariants, commands, layout.
+- `README.md` — the product: install, commands, safety model, test suite.
+- `docs/AGENT.md` — the agentic UI (`/agent`, OpenUI Lang over AG-UI) and the
+  read-only MCP server (`ntfsmnt mcp`).
+- `docs/specs/` and `docs/plans/` — one spec + plan per feature.
+- `pyproject.toml` — package metadata; version lives only in `ntfsmnt/__init__.py`.
+- `tests/manual/acceptance.md` — real-hardware acceptance procedure.
+
+Hard boundaries for any consumer, human or AI: no `osascript`, no auto-run
+repair tools, no `SIGKILL` on disk processes, failed mounts restore Apple's
+read-only mount, and the web layer never bypasses the CLI's guards.
