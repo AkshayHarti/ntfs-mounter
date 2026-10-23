@@ -13,13 +13,17 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 ## Commands
 
 - Install deps: `uv sync` (add `--extra web` for the browser UI and its tests)
-- Test: `uv run pytest -q` (296 tests; without `--extra web` the FastAPI/Jinja
+- Test: `uv run pytest -q` (335 tests; without `--extra web` the FastAPI/Jinja
   API, page, and schema tests skip, while the service, models, and config tests
   run)
 - Prerequisite check: `./scripts/setup.sh --check` (read-only, exits 0 anywhere)
 - Prerequisites install: `./scripts/setup.sh` (FUSE-T cask + FUSE-T-linked ntfs-3g)
 - Release: see `docs/RELEASING.md`; version lives only in `ntfsmnt/__init__.py`
 - App build: `bash scripts/build-app.sh` (unsigned bundle in `dist/`)
+- App install: `bash scripts/install-app.sh [--user] [--launch]`
+- Privileged setup: `sudo ./scripts/install-privileged.sh` (`--check` read-only,
+  exits 0 anywhere; `--uninstall` removes the rule before the venv)
+- npm tests: `cd npm && npm test` (also run by CI)
 - Site preview: `python3 -m http.server -d site` then http://localhost:8000
 - Homebrew: `docs/HOMEBREW.md` (formulas + local-tap test commands)
 - Manual acceptance: `tests/manual/acceptance.md` (real hardware, root, Full
@@ -59,6 +63,8 @@ tests/
   test_packaging.py    pyproject metadata, licence, single-source version
   test_setup_script.py read-only checks of scripts/setup.sh
   test_paths.py    ntfs-3g resolution: override, candidates, PATH, probe
+  test_install_privileged.py  static checks of the sudoers/venv installer
+  test_npm_package.py  npm version sync, bin, no deps, workflow
   web_helpers.py   shared builders for the web tests
   web_render.py    Jinja template rendering helpers for the web tests
   fixtures/        captured diskutil / mount output
@@ -69,6 +75,8 @@ tests/
 scripts/
   setup.sh         idempotent FUSE-T + ntfs-3g installer, `--check` is read-only
   build-app.sh     compile + assemble + ad-hoc-sign the menu-bar app
+  install-app.sh   build + copy the app to /Applications (or ~/Applications)
+  install-privileged.sh  root-owned CLI + narrow NOPASSWD rule for `web` only
   sign-app.sh      Developer ID signing + notarization + stapling (needs notarytool)
   ntfsmnt-dryrun.zsh  older read-only environment report
 
@@ -78,6 +86,7 @@ Formula/
 
 app/               menu-bar companion app source (Info.plist + Swift)
 site/              static GitHub Pages site (no JS, no build step)
+npm/               dependency-free proxy package (`npx ntfsmnt`) + node:test suite
 
 docs/
   specs/           design specs, one per feature
@@ -85,6 +94,7 @@ docs/
   RELEASING.md     pending publisher, version bump, tag, rollback
   HOMEBREW.md      the two formulas and how they differ from setup.sh
   APP.md           what the menu-bar app does, unsigned run, notarization
+  NPM.md           the proxy package, trusted publishing, version sync
   SITE.md          the Pages site, local preview, enablement
 ```
 
@@ -197,7 +207,31 @@ CLI rules above. Do not weaken these either.
    root.
 7. **Read-only without root.** Without root (or without owner ids) every
    mutation is refused with a structured 403; state remains readable and the
-   page says why. Nothing re-execs `sudo` on the user's behalf.
+   page says why. Nothing re-execs `sudo` on the user's behalf — with one
+   sanctioned exception: the menu-bar app may start `web` through the narrow
+   `NOPASSWD` rule described under "Privileged install invariants".
+
+## Privileged install invariants
+
+`scripts/install-privileged.sh` is the only thing allowed to grant root without
+a prompt. Do not weaken these.
+
+1. **Root-owned code only.** The `NOPASSWD` rule points at
+   `/usr/local/libexec/ntfsmnt/bin/ntfsmnt`, a venv owned by `root:wheel` with
+   no group/other write. A rule for a user-writable path is passwordless root
+   for anyone who can edit it; the installer refuses one.
+2. **The rule names `web` only.** Never widen it to `ALL`, to `mount`, or to a
+   bare binary path. Mount/unmount/eject run inside the already-root server.
+3. **Validate before installing.** `visudo -cf` on a temp file, then
+   `install -m 0440 -o root -g wheel`; never edit `/etc/sudoers`.
+4. **Uninstall removes the rule first**, then the venv, so there is no window
+   where the grant outlives the code.
+5. **No always-on service.** No LaunchDaemon, no login item; the server is a
+   child of the app and dies with it. The token travels only over the stdout
+   pipe, never a file.
+6. **The app's `SIGKILL` is for its own server child only**, after `SIGTERM`
+   and a 5 s wait. It must never target a mount, `ntfs-3g`, or any disk-related
+   process; invariant 3 above still forbids `kill -9` there.
 
 ## Conventions
 
