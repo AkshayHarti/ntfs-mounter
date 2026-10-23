@@ -17,6 +17,8 @@ class Settings:
     allowed_hosts: frozenset[str] = frozenset()
     allowed_origins: frozenset[str] = frozenset()
     cookie_name: str = "ntfsmnt_session"
+    agent_llm: str | None = None
+    agent_model: str = "gpt-4o-mini"
 
 
 def _parse_owner(text: str) -> tuple[int, int]:
@@ -44,6 +46,8 @@ def settings_from(
     euid: int,
     token: str | None = None,
     open_browser: bool = False,
+    agent_llm: str | None = None,
+    agent_model: str = "gpt-4o-mini",
 ) -> Settings:
     resolved = _parse_owner(owner) if owner is not None else _env_owner(environ)
     root = euid == 0
@@ -54,6 +58,8 @@ def settings_from(
         root=root,
         read_only=(not root) or resolved is None,
         open_browser=open_browser,
+        agent_llm=agent_llm or None,
+        agent_model=agent_model,
     )
 
 

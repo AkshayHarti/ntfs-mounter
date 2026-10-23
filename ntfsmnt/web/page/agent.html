@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ntfsmnt — agent</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/agent.css">
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead__identity">
+      <h1 class="wordmark"><a href="/">ntfsmnt</a></h1>
+      <span class="badge badge--root">agent</span>
+      <span class="badge" id="generator-badge" hidden></span>
+    </div>
+    <span class="live" id="live" data-live="connecting">live</span>
+  </header>
+
+  <main class="agent">
+    <section class="canvas" id="canvas" aria-label="Generated interface">
+      <p class="canvas__empty">Starting the agent…</p>
+    </section>
+
+    <aside class="chat" aria-label="Conversation">
+      <div class="chat__log" id="log" role="log" aria-live="polite"></div>
+      <form class="chat__composer" id="composer">
+        <textarea id="input" rows="2" placeholder="Ask: “mount ELEMENTS”, “run doctor”, “what can you do?”" aria-label="Message the agent"></textarea>
+        <button type="submit">Send</button>
+      </form>
+      <p class="chat__note">The agent prepares actions; you confirm them. For destructive
+        options (<code>--recover</code>, <code>--remove-hiberfile</code>) use the
+        <a href="/">classic dashboard</a>.</p>
+    </aside>
+  </main>
+
+  <div id="alert" role="alert" class="alert" hidden></div>
+
+  <script src="/static/agent.js" defer></script>
+</body>
+</html>

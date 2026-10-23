@@ -34,17 +34,9 @@ def _error(status: int, code: str, message: str, next_step: str | None = None):
     )
 
 
-def require_session(settings: Settings, request: Request) -> None:
-    if not cookie_matches(settings.token, request.cookies.get(settings.cookie_name)):
-        raise HTTPException(status_code=401, detail="missing or invalid session")
-
-
-def require_mutation(settings: Settings, request: Request) -> None:
-    require_session(settings, request)
-    if request.headers.get("x-ntfsmnt") != "1":
-        raise HTTPException(status_code=403, detail="missing X-NTFSMNT header")
-    if request.headers.get("origin") not in settings.allowed_origins:
-        raise HTTPException(status_code=403, detail="bad origin")
+from ntfsmnt.web.auth import require_session  # noqa: F401  (re-exported)
+from ntfsmnt.web.auth import require_mutation  # noqa: F401  (re-exported)
+from ntfsmnt.web.agent import register_agent_routes
 
 
 _FORM_TRUE = {"on", "true", "1", "yes"}
@@ -336,6 +328,8 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
     async def http_error(request: Request, exc: HTTPException):
         code = "unauthorized" if exc.status_code == 401 else "forbidden_origin"
         return _error(exc.status_code, code, str(exc.detail))
+
+    register_agent_routes(app, settings, svc, templates)
 
     app.mount("/static", StaticFiles(directory=PAGE_DIR), name="static")
     return app
