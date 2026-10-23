@@ -31,11 +31,13 @@ from ntfsmnt.volumes import Volume
 
 PROBE_FILENAME = ".ntfsmnt-probe"
 DEVICE_WAIT_ATTEMPTS = 10
-#: How long each quiet window is before ntfs-3g starts. FSKit can put Apple's
+#: Length of one quiet window before ntfs-3g starts. FSKit can put Apple's
 #: read-only mount back after the first eviction, so the mounter re-checks for a
-#: remount instead of trusting a single unmount. (The exit-66 failures were a
-#: different bug: FSKit deletes the mount-point directory, recreated in step 4c.)
-SETTLE_SECONDS = 8
+#: remount instead of trusting a single unmount. The 8 s previously kept margin
+#: over a suspected teardown race, but the exit-66 failures were FSKit deleting
+#: the mount-point directory (recreated in step 4c), so 1 s per re-check is
+#: enough.
+SETTLE_SECONDS = 1
 #: How many clean settle windows to try when macOS keeps remounting read-only.
 SETTLE_ATTEMPTS = 3
 
