@@ -45,8 +45,11 @@ the app's state:
   repair operation.
 - **Quit** stops the server first, so the app never leaves an orphaned root
   server behind.
-- **Grant Full Disk Access…** opens System Settings → Privacy & Security →
-  Full Disk Access.
+- **Grant Full Disk Access…** explains the step and then opens System Settings →
+  Privacy & Security → Full Disk Access with the app selected in Finder. macOS
+  does **not** list ntfsmnt until you add it: click **+** and choose
+  `/Applications/ntfsmnt.app`, or drag the app into the list. Relaunch the app
+  afterwards.
 - **Setup guide** opens <https://akshayharti.github.io/ntfs-mounter/>.
 
 Detection uses the contract check,
@@ -95,9 +98,10 @@ app shows the setup alert instead.
 
 3. Grant Full Disk Access to the **app**. The root server inherits the app's
    TCC attribution, so without this the CLI cannot read the raw disk and
-   mounts fail with `EPERM`. Use **Grant Full Disk Access…**, then add
-   `ntfsmnt.app` under System Settings → Privacy & Security → Full Disk Access.
-   Relaunch the app after granting it.
+   mounts fail with `EPERM`. Use **Grant Full Disk Access…**; the app is not in
+   the list until you add it, so click **+** and choose
+   `/Applications/ntfsmnt.app` (or drag it in from the Finder window), then turn
+   the switch on. Relaunch the app after granting it.
 
 4. Choose **Start dashboard**. The browser opens on the token URL and the menu
    changes to **Open dashboard** / **Stop dashboard**.
@@ -263,7 +267,8 @@ signing cannot be notarized, and `build-app.sh` already does it for local use.
 | No menu-bar item after launching | The app is `LSUIElement`, so there is no window and no Dock icon. Look for the drive icon in the menu bar; quit and relaunch if a menu-bar manager hid it. |
 | Menu offers **Set up…** after setup | Detection runs `sudo -n -l <root-cli> web --port 0 --owner <uid>:<gid>`. Re-run **Set up…**, then check `sudo ./scripts/install-privileged.sh --check`. |
 | Start shows an alert instead of the browser | Read the captured stderr in the alert. `a password is required` means the rule is missing; other messages usually mean the `web` extra or FUSE-T is missing. |
-| Browser opens but mounts fail with `EPERM` | The app does not have Full Disk Access. Use **Grant Full Disk Access…**, add the app, and relaunch it. |
+| Browser opens but mounts fail with `EPERM` | The app does not have Full Disk Access. Use **Grant Full Disk Access…**, add the app with **+**, and relaunch it. |
+| Full Disk Access does not list ntfsmnt | macOS never adds an app by itself. Click **+** and choose `/Applications/ntfsmnt.app`, or drag it in from Finder. After rebuilding the app, its ad-hoc signature changes, so add it again. |
 | **Start dashboard** does nothing | The menu is probably in the stopped state but the rule was removed. Re-run setup, or check `--check` output. |
 
 ## What is verified

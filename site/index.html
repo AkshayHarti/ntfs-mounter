@@ -128,7 +128,7 @@
 
   <pre><code>bash scripts/install-app.sh --launch</code></pre>
 
-  <p>Click <strong>Set up&hellip;</strong> once (one password), grant Full Disk Access to <code>ntfsmnt.app</code>, then <strong>Start dashboard</strong>. Setup writes a root-owned CLI at <code>/usr/local/libexec/ntfsmnt</code> and a sudoers rule that names <code>web</code> only; the same installer removes both with <code>--uninstall</code>.</p>
+  <p>Click <strong>Set up&hellip;</strong> once (one password), grant Full Disk Access to <code>ntfsmnt.app</code> (click <strong>+</strong> in the pane &mdash; macOS does not list it by itself), then <strong>Start dashboard</strong>. Setup writes a root-owned CLI at <code>/usr/local/libexec/ntfsmnt</code> and a sudoers rule that names <code>web</code> only; the same installer removes both with <code>--uninstall</code>.</p>
 
   <p class="future"><strong>Future work.</strong> The menu-bar app is unsigned. Notarization needs an Apple Developer ID; the walk-through is in <code>docs/APP.md</code>. A LaunchDaemon or XPC privileged helper is deliberately not used.</p>
 </section>

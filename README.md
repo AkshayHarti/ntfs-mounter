@@ -426,8 +426,10 @@ First run:
 1. Click **Set up…** — Terminal opens the bundled installer and asks for your
    password once. It creates a root-owned CLI at
    `/usr/local/libexec/ntfsmnt` and the sudoers rule below.
-2. Grant the app **Full Disk Access** (menu item **Grant Full Disk Access…**
-   opens the pane), then relaunch the app.
+2. Grant the app **Full Disk Access**: the menu item explains it, opens the pane,
+   and selects the app in Finder. macOS does not list ntfsmnt until you add it —
+   click **+** and choose `/Applications/ntfsmnt.app`, or drag it in — then
+   relaunch the app.
 
 After that, **Start dashboard** opens the browser with no Terminal and no
 password. **Stop dashboard** and **Quit** terminate only the server this app
@@ -568,8 +570,10 @@ Security → Full Disk Access), then quit and reopen that app. `doctor` reports
 `device-access` failure with a `fix:` line when this is missing.
 
 If you use the menu-bar app, grant Full Disk Access to **ntfsmnt.app** instead:
-the root server it starts is attributed to the app, not to Terminal. Both
-grants can coexist; each covers the way you launched the server.
+the root server it starts is attributed to the app, not to Terminal. The app
+does not appear in the list until you add it with **+** (or drag it in from
+Finder); rebuilding the app changes its ad-hoc signature, so re-add it after a
+rebuild. Both grants can coexist; each covers the way you launched the server.
 
 `osascript -e 'do shell script ... with administrator privileges'` is
 deliberately not used. The privileged work is then attributed to `osascript`,

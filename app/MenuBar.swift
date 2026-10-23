@@ -185,6 +185,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openFullDiskAccess() {
+        // macOS never adds an app to this list by itself, and the pane has no
+        // "add this app" button: the user must use + or drag the bundle in.
+        let appPath = Bundle.main.bundleURL.path
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Add ntfsmnt to Full Disk Access"
+        alert.informativeText = """
+        System Settings does not list ntfsmnt until you add it.
+
+        1. In Full Disk Access, click + (or drag the app from the Finder window).
+        2. Choose \(appPath).
+        3. Turn the switch on, then quit and reopen ntfsmnt.
+        """
+        alert.addButton(withTitle: "Show the app and open Settings")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
         NSWorkspace.shared.open(fullDiskAccessURL)
     }
 
