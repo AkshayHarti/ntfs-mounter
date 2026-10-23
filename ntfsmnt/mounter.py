@@ -35,6 +35,8 @@ DEVICE_WAIT_ATTEMPTS = 10
 #: helper fails instantly (mount_nfs exit 66) when it races that teardown, so
 #: the proven probe lets the device settle before starting ntfs-3g.
 SETTLE_SECONDS = 3
+#: How many clean settle windows to try when macOS keeps remounting read-only.
+SETTLE_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,21 @@ def _wait_for_mount(
     return _has_our_mount(_safe_mounts(mounts), mount_point, label)
 
 
+def _apple_entries(
+    entries: list[MountEntry], device_path: str, mount_point: str
+) -> list[MountEntry]:
+    """Apple's mounts of this device, or read-only mounts at this mount point."""
+    return [
+        entry
+        for entry in entries
+        if not is_fuse_t(entry)
+        and (
+            entry.source == device_path
+            or (entry.mount_point == mount_point and entry.source.startswith("/dev/"))
+        )
+    ]
+
+
 def _evict_apple_entries(
     entries: list[MountEntry],
     device_path: str,
@@ -156,13 +173,8 @@ def _evict_apple_entries(
     run: Callable[[list[str]], tuple[int, str]],
 ) -> None:
     """Unmount Apple's mounts of this device, or at this device's mount point."""
-    for entry in entries:
-        if is_fuse_t(entry):
-            continue
-        if entry.source == device_path or (
-            entry.mount_point == mount_point and entry.source.startswith("/dev/")
-        ):
-            _unmount(entry.mount_point, run=run)
+    for entry in _apple_entries(entries, device_path, mount_point):
+        _unmount(entry.mount_point, run=run)
 
 
 def _evict_apple_remounts(
@@ -175,6 +187,31 @@ def _evict_apple_remounts(
     for entry in _safe_mounts(mounts):
         if entry.source == device_path and entry.mount_point != mount_point:
             _unmount(entry.mount_point, run=run)
+
+
+def _settled_clear(
+    device_path: str,
+    mount_point: str,
+    *,
+    mounts: Callable[[], list[MountEntry]],
+    run: Callable[[list[str]], tuple[int, str]],
+    sleep: Callable[[float], None],
+) -> bool:
+    """Wait for a clean settle window, evicting a read-only remount if it lands.
+
+    FUSE-T's NFS mount helper fails immediately (mount_nfs exit 66) when it
+    starts while Apple's FSKit mount is still being torn down, so ntfs-3g must
+    only start after ``SETTLE_SECONDS`` with nothing mounted at the device or
+    the path. Returns whether such a window was found.
+    """
+    for _ in range(SETTLE_ATTEMPTS):
+        sleep(SETTLE_SECONDS)
+        entries = _apple_entries(_safe_mounts(mounts), device_path, mount_point)
+        if not entries:
+            return True
+        for entry in entries:
+            _unmount(entry.mount_point, run=run)
+    return False
 
 
 def _restore_read_only(
@@ -317,12 +354,24 @@ def mount_volume(
 
         # 4b. FSKit releases the device asynchronously. Starting ntfs-3g while
         # that teardown is still in flight makes FUSE-T's NFS mount helper fail
-        # immediately (mount_nfs exit 66), so let it settle first and evict a
-        # read-only remount that landed at our path in the meantime.
-        sleep(SETTLE_SECONDS)
-        _evict_apple_entries(
-            _safe_mounts(mounts), device.device, mount_point, run=run
-        )
+        # immediately (mount_nfs exit 66), so only start after a settle window
+        # with nothing mounted at the device or the path.
+        if not _settled_clear(
+            device.device,
+            mount_point,
+            mounts=mounts,
+            run=run,
+            sleep=sleep,
+        ):
+            _fail(
+                f"{device.label} is still mounted read-only at {mount_point} "
+                "and macOS keeps remounting it, so the read-write mount could "
+                "not start.",
+                device_path=device.device,
+                mount_point=mount_point,
+                mounts=mounts,
+                run=run,
+            )
 
         # 5. Mount read-write through ntfs-3g.
         returncode, stderr = run(

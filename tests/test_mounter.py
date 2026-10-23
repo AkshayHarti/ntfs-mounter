@@ -598,17 +598,38 @@ def test_settles_after_eviction_before_mounting(fake_env):
 def test_evicts_apple_remount_that_lands_during_settle(fake_env):
     point = fake_env.points[DEVICE.device]
     record = fake_env.sleep
+    remounts = []
 
     def remount(seconds):
         record(seconds)
-        fake_env.table.append(ro_entry(DEVICE, point))
+        if not remounts:
+            remounts.append(True)
+            fake_env.table.append(ro_entry(DEVICE, point))
 
     fake_env.sleep = remount
     fake_env.mount(state="ro")
 
     unmounts = [c for c in fake_env.calls if c[:2] == ["diskutil", "unmount"]]
     assert len(unmounts) == 2
+    assert fake_env.slept == [mounter.SETTLE_SECONDS, mounter.SETTLE_SECONDS]
     assert fake_env.ntfs3g_invocations() == 1
+
+
+def test_gives_up_when_apple_keeps_remounting(fake_env):
+    point = fake_env.points[DEVICE.device]
+    record = fake_env.sleep
+
+    def remount(seconds):
+        record(seconds)
+        fake_env.table.append(ro_entry(DEVICE, point))
+
+    fake_env.sleep = remount
+    with pytest.raises(MountFailed) as err:
+        fake_env.mount(state="ro")
+
+    assert "keeps remounting" in str(err.value)
+    assert "read-only mount was restored" in str(err.value)
+    assert fake_env.ntfs3g_invocations() == 0
 
 
 def test_failed_diskutil_unmount_falls_back_to_umount(fake_env):
