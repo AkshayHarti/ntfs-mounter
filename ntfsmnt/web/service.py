@@ -181,8 +181,8 @@ class Service:
                                 else "already writable" if volume.state == "rw" else None)),
             ActionView("unmount", mode is None and volume.state == "rw",
                        mode or ("not mounted read-write" if volume.state != "rw" else None)),
-            ActionView("eject", mode is None and volume.state == "unmounted",
-                       mode or ("unmount it first" if volume.state != "unmounted" else None)),
+            ActionView("eject", mode is None and volume.state in ("ro", "unmounted"),
+                       mode or ("unmount it first" if volume.state == "rw" else None)),
         )
 
     def _options(self, volume: Volume) -> tuple[OptionView, ...]:
@@ -292,6 +292,17 @@ class Service:
                     "operation_in_progress", "Another operation is in progress.", 409,
                     "Wait for it to finish."))
 
+    @staticmethod
+    def _unmount_error(exc: UnmountFailed, label: str) -> ActionError:
+        """Map a failed teardown to the error the client shows."""
+        text = str(exc).lower()
+        busy = "busy" in text or "in use" in text
+        return ActionError(
+            "busy" if busy else "action_failed", str(exc),
+            409 if busy else 500,
+            "Close anything using it, then retry." if busy else None,
+            detail=str(exc), volume=label)
+
     def unmount(self, target, *, label, size=None):
         if (error := self._guard()) is not None:
             return self._result("unmount", error, label)
@@ -311,13 +322,8 @@ class Service:
                         keep_unmounted=False, label_shared=self._shared(volume, volumes),
                     )
                 except UnmountFailed as exc:
-                    text = str(exc).lower()
-                    busy = "busy" in text or "in use" in text
-                    return self._result("unmount", ActionError(
-                        "busy" if busy else "action_failed", str(exc),
-                        409 if busy else 500,
-                        "Close anything using it, then retry." if busy else None,
-                        detail=str(exc), volume=label), label)
+                    return self._result(
+                        "unmount", self._unmount_error(exc, label), label)
                 if not restored:
                     return self._result("unmount", ActionError(
                         "action_failed",
@@ -341,10 +347,23 @@ class Service:
                     volume, volumes = self._resolve(target, label, size)
                 except _Fail as exc:
                     return self._result("eject", exc.error, label)
-                if volume.state != "unmounted":
+                if volume.state == "rw":
                     return self._result("eject", ActionError(
-                        "busy", f"{label} is still mounted.", 409,
+                        "busy", f"{label} is mounted read-write.", 409,
                         "Unmount it first, then eject."), label)
+                if volume.state == "ro":
+                    # The read-only mount is Apple's; an Eject click means the
+                    # whole disk goes, so tear the read-only mount down first
+                    # and do not put it back.
+                    try:
+                        unmount_volume(
+                            volume, run=self._run, mounts=self._mounts,
+                            sleep=self._sleep, keep_unmounted=True,
+                            label_shared=self._shared(volume, volumes),
+                        )
+                    except UnmountFailed as exc:
+                        return self._result(
+                            "eject", self._unmount_error(exc, label), label)
                 try:
                     eject_volume(
                         volume, run=self._run, mounts=self._mounts, sleep=self._sleep,

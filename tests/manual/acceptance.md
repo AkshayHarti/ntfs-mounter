@@ -327,7 +327,7 @@ HD1 after the CLI acceptance above, from the same Full Disk Access terminal.
 1. `sudo uv run ntfsmnt web` prints a URL; open it; every volume and state chip matches `ntfsmnt list`.
 2. Mount HD1 from the page; write a file in Finder; state flips to writable without a manual refresh; the log records it.
 3. Unmount; read-only mount returns and the chip flips back.
-4. Eject; the volume disappears after the reconcile tick.
+4. Eject; from `ro` or unmounted it unmounts the read-only mount first and then ejects the parent disk; the volume disappears after the reconcile tick. Restore with `sudo diskutil mountDisk disk4` (substitute the real disk).
 5. Guarded action on a hibernated volume: wrong label keeps Confirm disabled and a hand-crafted POST is rejected; correct label mounts with hiberfile removal.
 6. Non-root launch: banner shows, buttons disabled, POST returns 403.
 7. Close the tab; the service keeps running until `Ctrl-C` and then exits cleanly.

@@ -36,12 +36,12 @@ def test_volume_id_falls_back_to_identifier():
     assert volume_id(make_volume(uuid="")) == "dev-disk4s1"
 
 
-def test_read_only_volume_offers_mount():
+def test_read_only_volume_offers_mount_and_eject():
     svc = make_service([make_volume(mounts=[RO], mount_point="/Volumes/HD1")])
     view = svc.snapshot().volumes[0]
     assert view.state == "ro"
     assert {a.name: a.enabled for a in view.actions} == {
-        "mount": True, "unmount": False, "eject": False,
+        "mount": True, "unmount": False, "eject": True,
     }
 
 
@@ -294,7 +294,40 @@ def test_unmount_of_unmounted_volume_is_not_mounted():
     assert result.error.code == "not_mounted"
 
 
-def test_eject_of_mounted_volume_is_busy():
+def test_eject_of_rw_volume_is_busy():
+    rw = make_volume(mounts=[RW], mount_point="/Volumes/HD1")
+    svc = make_service([rw])
+    result = svc.eject("UUID-1", label="HD1")
+    assert result.error.code == "busy"
+
+def test_eject_of_read_only_volume_unmounts_then_ejects(monkeypatch):
+    """Unmount restores Apple's mount, so Eject from `ro` tears it down first."""
+    calls: dict[str, object] = {}
+
+    def fake_unmount(volume, **kw):
+        calls["keep_unmounted"] = kw["keep_unmounted"]
+        return True
+
+    def fake_eject(volume, **kw):
+        calls["ejected"] = volume.device.label
+
+    monkeypatch.setattr(svc_mod, "unmount_volume", fake_unmount)
+    monkeypatch.setattr(svc_mod, "eject_volume", fake_eject)
+    svc = make_service([make_volume(mounts=[RO], mount_point="/Volumes/HD1")])
+    result = svc.eject("UUID-1", label="HD1")
+    assert result.ok is True
+    assert calls == {"keep_unmounted": True, "ejected": "HD1"}
+
+def test_eject_of_read_only_volume_busy_keeps_the_mount(monkeypatch):
+    """A busy read-only volume is not ejected and no unmount ran."""
+    exc = svc_mod.UnmountFailed("HD1 is busy.")
+
+    def fake_unmount(volume, **kw):
+        raise exc
+
+    monkeypatch.setattr(svc_mod, "unmount_volume", fake_unmount)
+    monkeypatch.setattr(
+        svc_mod, "eject_volume", lambda *a, **k: pytest.fail("ejected anyway"))
     svc = make_service([make_volume(mounts=[RO], mount_point="/Volumes/HD1")])
     result = svc.eject("UUID-1", label="HD1")
     assert result.error.code == "busy"
