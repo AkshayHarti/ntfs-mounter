@@ -16,7 +16,7 @@ def build_mount_args(
     remove_hiberfile: bool = False,
 ) -> list[str]:
     options = (
-        f"uid={uid},gid={gid},umask=022,local,auto_xattr,noatime,volname={label}"
+        f"uid={uid},gid={gid},umask=022,local,auto_xattr,noatime,volname={label},foreground"
     )
     if recover:
         options += ",recover"
