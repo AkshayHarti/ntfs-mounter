@@ -31,6 +31,10 @@ from ntfsmnt.volumes import Volume
 
 PROBE_FILENAME = ".ntfsmnt-probe"
 DEVICE_WAIT_ATTEMPTS = 10
+#: Apple's FSKit mount releases the device asynchronously. FUSE-T's NFS mount
+#: helper fails instantly (mount_nfs exit 66) when it races that teardown, so
+#: the proven probe lets the device settle before starting ntfs-3g.
+SETTLE_SECONDS = 3
 
 
 @dataclass(frozen=True)
@@ -142,6 +146,23 @@ def _wait_for_mount(
             return True
         sleep(1)
     return _has_our_mount(_safe_mounts(mounts), mount_point, label)
+
+
+def _evict_apple_entries(
+    entries: list[MountEntry],
+    device_path: str,
+    mount_point: str,
+    *,
+    run: Callable[[list[str]], tuple[int, str]],
+) -> None:
+    """Unmount Apple's mounts of this device, or at this device's mount point."""
+    for entry in entries:
+        if is_fuse_t(entry):
+            continue
+        if entry.source == device_path or (
+            entry.mount_point == mount_point and entry.source.startswith("/dev/")
+        ):
+            _unmount(entry.mount_point, run=run)
 
 
 def _evict_apple_remounts(
@@ -281,14 +302,7 @@ def mount_volume(
     # mount — including an interrupt, so the sequence is guarded by
     # BaseException below.
     try:
-        for entry in mounts():
-            if is_fuse_t(entry):
-                continue
-            if entry.source == device.device or (
-                entry.mount_point == mount_point
-                and entry.source.startswith("/dev/")
-            ):
-                _unmount(entry.mount_point, run=run)
+        _evict_apple_entries(mounts(), device.device, mount_point, run=run)
 
         # 4. Wait for the device node to settle after the unmount.
         if not _wait_for_device(device.device, run=run, sleep=sleep):
@@ -300,6 +314,15 @@ def mount_volume(
                 mounts=mounts,
                 run=run,
             )
+
+        # 4b. FSKit releases the device asynchronously. Starting ntfs-3g while
+        # that teardown is still in flight makes FUSE-T's NFS mount helper fail
+        # immediately (mount_nfs exit 66), so let it settle first and evict a
+        # read-only remount that landed at our path in the meantime.
+        sleep(SETTLE_SECONDS)
+        _evict_apple_entries(
+            _safe_mounts(mounts), device.device, mount_point, run=run
+        )
 
         # 5. Mount read-write through ntfs-3g.
         returncode, stderr = run(

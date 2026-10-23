@@ -588,6 +588,29 @@ def test_evicts_competitor_before_mounting(fake_env):
     assert fake_env.calls[unmount_indexes[0]][2] == MOUNT_POINT
 
 
+def test_settles_after_eviction_before_mounting(fake_env):
+    fake_env.mount(state="ro")
+
+    assert fake_env.slept == [mounter.SETTLE_SECONDS]
+    assert fake_env.ntfs3g_invocations() == 1
+
+
+def test_evicts_apple_remount_that_lands_during_settle(fake_env):
+    point = fake_env.points[DEVICE.device]
+    record = fake_env.sleep
+
+    def remount(seconds):
+        record(seconds)
+        fake_env.table.append(ro_entry(DEVICE, point))
+
+    fake_env.sleep = remount
+    fake_env.mount(state="ro")
+
+    unmounts = [c for c in fake_env.calls if c[:2] == ["diskutil", "unmount"]]
+    assert len(unmounts) == 2
+    assert fake_env.ntfs3g_invocations() == 1
+
+
 def test_failed_diskutil_unmount_falls_back_to_umount(fake_env):
     fake_env.mount(state="ro", diskutil_unmount_rc=1)
 
@@ -662,8 +685,10 @@ def test_verified_restore_is_reported_as_restored(fake_env):
 
 def test_interrupt_after_eviction_still_restores_read_only(fake_env):
     # Apple's mount has been evicted when the mount-table read is interrupted.
+    # Reads: initial, eviction pass, settle re-check, then the wait-for-mount
+    # poll that is interrupted here.
     with pytest.raises(KeyboardInterrupt):
-        fake_env.mount(state="ro", interrupt_at=3)
+        fake_env.mount(state="ro", interrupt_at=4)
 
     assert fake_env.ntfs3g_invocations() == 1
     assert ["diskutil", "unmount", MOUNT_POINT] in fake_env.calls
