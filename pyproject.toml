@@ -1,7 +1,24 @@
 [project]
 name = "ntfsmnt"
-version = "0.1.0"
+dynamic = ["version"]
+description = "Mount NTFS volumes read-write on macOS via FUSE-T and ntfs-3g"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
+keywords = ["ntfs", "ntfs-3g", "fuse-t", "macos", "mount", "filesystem"]
+classifiers = [
+  "Environment :: MacOS X",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: System :: Filesystems",
+]
+
+[project.urls]
+Homepage = "https://github.com/AkshayHarti/ntfs-mounter"
+Repository = "https://github.com/AkshayHarti/ntfs-mounter"
+Issues = "https://github.com/AkshayHarti/ntfs-mounter/issues"
 
 [project.scripts]
 ntfsmnt = "ntfsmnt.cli:main"
@@ -12,6 +29,9 @@ web = ["fastapi>=0.115", "uvicorn>=0.30", "jinja2>=3.1"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "ntfsmnt/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ntfsmnt"]
