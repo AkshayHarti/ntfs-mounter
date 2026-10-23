@@ -13,9 +13,12 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 ## Commands
 
 - Install deps: `uv sync` (add `--extra web` for the browser UI and its tests)
-- Test: `uv run pytest -q` (274 tests; without `--extra web` the FastAPI/Jinja
+- Test: `uv run pytest -q` (284 tests; without `--extra web` the FastAPI/Jinja
   API, page, and schema tests skip, while the service, models, and config tests
   run)
+- Prerequisite check: `./scripts/setup.sh --check` (read-only, exits 0 anywhere)
+- Prerequisites install: `./scripts/setup.sh` (FUSE-T cask + FUSE-T-linked ntfs-3g)
+- Release: see `docs/RELEASING.md`; version lives only in `ntfsmnt/__init__.py`
 - Manual acceptance: `tests/manual/acceptance.md` (real hardware, root, Full
   Disk Access terminal)
 - Build/run: `uv run ntfsmnt ...`
@@ -48,12 +51,23 @@ ntfsmnt/
 
 tests/
   test_*.py        unit tests with injected runners
+  test_packaging.py    pyproject metadata, licence, single-source version
+  test_setup_script.py read-only checks of scripts/setup.sh
   web_helpers.py   shared builders for the web tests
   web_render.py    Jinja template rendering helpers for the web tests
   fixtures/        captured diskutil / mount output
   manual/
     acceptance.md  human acceptance procedure (HD1 only)
     fuset-mount-test.sh  older root-only reference probe (verbatim)
+
+scripts/
+  setup.sh         idempotent FUSE-T + ntfs-3g installer, `--check` is read-only
+  ntfsmnt-dryrun.zsh  older read-only environment report
+
+docs/
+  specs/           design specs, one per feature
+  plans/           implementation plans paired with the specs
+  RELEASING.md     pending publisher, version bump, tag, rollback
 ```
 
 ## Module responsibilities
