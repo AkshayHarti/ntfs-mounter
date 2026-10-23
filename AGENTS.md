@@ -13,7 +13,7 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 ## Commands
 
 - Install deps: `uv sync` (add `--extra web` for the browser UI and its tests)
-- Test: `uv run pytest -q` (339 tests; without `--extra web` the FastAPI/Jinja
+- Test: `uv run pytest -q` (341 tests; without `--extra web` the FastAPI/Jinja
   API, page, and schema tests skip, while the service, models, and config tests
   run)
 - Prerequisite check: `./scripts/setup.sh --check` (read-only, exits 0 anywhere)

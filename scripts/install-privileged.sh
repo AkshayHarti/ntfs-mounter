@@ -190,6 +190,22 @@ write_sudoers() {
   ok "$SUDOERS_FILE written"
 }
 
+# A venv is not relocatable by default: console scripts embed the absolute
+# interpreter path they were built with. After the swap, repoint every script
+# that still names the build directory at the final one.
+fix_shebangs() {
+  local old=$1 new=$2 script first
+  for script in "$new"/bin/*; do
+    [[ -f $script && ! -L $script ]] || continue
+    first=$(head -n 1 "$script" 2>/dev/null || true)
+    case $first in
+      "#!$old/"*)
+        sed -i '' "1s|#!$old/|#!$new/|" "$script"
+        ;;
+    esac
+  done
+}
+
 install_cli() {
   local spec uv python build_dir
 
@@ -228,8 +244,12 @@ install_cli() {
   step "Swap $build_dir into $VENV_DIR"
   rm -rf "$VENV_DIR"
   mv "$build_dir" "$VENV_DIR"
+  fix_shebangs "$build_dir" "$VENV_DIR"
   trap cleanup EXIT
   [[ -x $CLI_BIN ]] || die "$CLI_BIN is missing after the swap"
+  # Prove the entry point actually starts; a stale shebang fails here, not in
+  # the app's alert.
+  "$CLI_BIN" --help >/dev/null 2>&1 || die "$CLI_BIN does not run after the swap (stale interpreter path?)"
   ok "$CLI_BIN installed"
 
   write_sudoers

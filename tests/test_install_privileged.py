@@ -103,6 +103,36 @@ def test_install_is_atomic() -> None:
     assert 'trap "rm -rf \'$build_dir\'; cleanup" EXIT' in body
 
 
+def test_fix_shebangs_repoints_console_scripts(tmp_path) -> None:
+    start = TEXT.index("fix_shebangs() {")
+    func = TEXT[start : TEXT.index("\n}\n", start) + 3]
+    old = tmp_path / "ntfsmnt.build.123"
+    new = tmp_path / "ntfsmnt"
+    for path in (old / "bin", new / "bin"):
+        path.mkdir(parents=True)
+    (new / "bin" / "python").symlink_to(sys.executable)
+    script = new / "bin" / "ntfsmnt"
+    script.write_text(f"#!{old}/bin/python\n")
+    other = new / "bin" / "other"
+    other.write_text("#!/bin/sh\n")
+
+    subprocess.run(
+        ["bash", "-c", func + '\nfix_shebangs "$OLD" "$NEW"'],
+        env={**os.environ, "OLD": str(old), "NEW": str(new)},
+        check=True,
+    )
+
+    assert script.read_text().splitlines()[0] == f"#!{new}/bin/python"
+    assert other.read_text().splitlines()[0] == "#!/bin/sh"
+
+
+def test_swap_rewrites_shebangs_and_smoke_tests_the_entry_point() -> None:
+    body = _function("install_cli")
+    assert body.index('mv "$build_dir" "$VENV_DIR"') < body.index("fix_shebangs")
+    # A stale interpreter path must fail the install, not the app's alert.
+    assert '"$CLI_BIN" --help' in body
+
+
 def test_check_probes_the_full_start_argv() -> None:
     # The rule carries args (`web *`); a bare `web` probe never matches it.
     code = _code()
