@@ -1,0 +1,38 @@
+{
+  "name": "ntfsmnt",
+  "version": "0.1.0",
+  "description": "Read-write NTFS on macOS: a dependency-free proxy for the ntfsmnt Python CLI.",
+  "bin": {
+    "ntfsmnt": "bin/ntfsmnt.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AkshayHarti/ntfs-mounter.git"
+  },
+  "homepage": "https://github.com/AkshayHarti/ntfs-mounter#readme",
+  "bugs": {
+    "url": "https://github.com/AkshayHarti/ntfs-mounter/issues"
+  },
+  "keywords": [
+    "ntfs",
+    "ntfs-3g",
+    "fuse-t",
+    "macos",
+    "mount",
+    "cli"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
