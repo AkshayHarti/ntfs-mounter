@@ -310,12 +310,22 @@ run_check() {
 
   if [[ -f $SUDOERS_FILE ]]; then
     mode=$(stat -f '%Lp' "$SUDOERS_FILE" 2>/dev/null || true)
+    owner=$(stat -f '%Su:%Sg' "$SUDOERS_FILE" 2>/dev/null || true)
     if [[ $mode == 440 ]]; then
       ok "$SUDOERS_FILE mode 0440"
     else
       fail "$SUDOERS_FILE mode is ${mode:-unknown}, expected 0440"
     fi
-    if grep -qxF -- "$RULE" "$SUDOERS_FILE" 2>/dev/null; then
+    if [[ $owner == root:wheel ]]; then
+      ok "$SUDOERS_FILE is owned by root:wheel"
+    else
+      fail "$SUDOERS_FILE is owned by ${owner:-unknown}, expected root:wheel"
+    fi
+    # The file is 0440 root:wheel: a non-root check cannot read it. The
+    # `sudo -n -l` probe below is then the authoritative check.
+    if [[ ! -r $SUDOERS_FILE ]]; then
+      info "$SUDOERS_FILE is not readable as this user; 'sudo -n -l' below is authoritative"
+    elif grep -qxF -- "$RULE" "$SUDOERS_FILE" 2>/dev/null; then
       ok "sudoers rule matches the contract (web only)"
     else
       fail "sudoers rule does not match the contract"
