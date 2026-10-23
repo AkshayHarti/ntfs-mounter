@@ -32,7 +32,7 @@
 <section id="install" class="hero">
   <h1>Read-write NTFS on macOS, from the command line.</h1>
   <p class="lede">ntfsmnt replaces Apple&rsquo;s read-only NTFS mount for one volume at a time with an ntfs-3g mount served by FUSE-T: no kernel extension, no SIP change, no reboot.</p>
-  <p class="evidence">296 tests &middot; MIT licence &middot; Python &ge; 3.12 &middot; macOS only, verified on Apple Silicon (macOS 26.5.2)</p>
+  <p class="evidence">335 tests &middot; MIT licence &middot; Python &ge; 3.12 &middot; macOS only, verified on Apple Silicon (macOS 26.5.2)</p>
 
   <div class="install">
     <article class="option">
@@ -45,6 +45,12 @@
       <h2 class="option-title">From PyPI</h2>
       <pre><code>uv tool install "ntfsmnt[web]"</code></pre>
       <p>The CLI and the local web UI, installed from PyPI. <code>pipx install "ntfsmnt[web]"</code> is the equivalent; drop <code>[web]</code> for the CLI alone. The native prerequisites from the first option are still required.</p>
+    </article>
+
+    <article class="option">
+      <h2 class="option-title">From npm</h2>
+      <pre><code>npx ntfsmnt --help</code></pre>
+      <p>A dependency-free proxy: it finds the real Python CLI and hands it your arguments, or falls back to <code>uvx --from "ntfsmnt[web]"</code>. It reimplements nothing; the native prerequisites are still required. The first npm publish lands on the next <code>v*</code> tag.</p>
     </article>
 
     <article class="option">
@@ -88,11 +94,11 @@
   <p>The interesting part of a tool like this is what it refuses to do. These are the invariants the code enforces; they are written down in <code>AGENTS.md</code> and are not negotiable in a change.</p>
 
   <ul class="invariants">
-    <li><strong>One escalation path.</strong> Every mutating command re-execs the CLI through <code>sudo</code> in <code>privileged.py</code>. There is no <code>osascript</code>, no GUI password prompt, and no other route to root.</li>
+    <li><strong>One escalation path, one exception.</strong> Every mutating command re-execs the CLI through <code>sudo</code> in <code>privileged.py</code>. There is no <code>osascript</code>, no GUI password prompt, and no other route to root &mdash; except the menu-bar app, which starts <code>web</code> under a <code>NOPASSWD</code> rule that names one root-owned binary and one subcommand. It is opt-in at install and removed by the same installer.</li>
     <li><strong>A failed mount puts Apple&rsquo;s read-only mount back.</strong> The mounter evicts that mount to make room, so every failure path restores it, and the tool claims &ldquo;restored&rdquo; only when a fresh mount-table read confirms it.</li>
     <li><strong>The FSKit mount point is recreated.</strong> Unmounting Apple&rsquo;s FSKit volume also deletes <code>/Volumes/&lt;label&gt;</code>. The mounter recreates the directory before ntfs-3g starts, because FUSE-T&rsquo;s helper fails with exit 66 when the mount point vanishes underneath it.</li>
     <li><strong>One signal, once.</strong> The only signal the unmounter ever sends is <code>SIGTERM</code>, once, to the serving ntfs-3g after a normal unmount fails as busy. It retries the unmount and then reports; it never sends <code>SIGKILL</code>.</li>
-    <li><strong>The web UI is loopback-only, and guarded.</strong> It listens on <code>127.0.0.1</code>; the launch token is compared in constant time and exchanged once for an <code>HttpOnly</code>, <code>SameSite=Strict</code> cookie. Every mutation needs the <code>X-NTFSMNT: 1</code> header and an allowed <code>Origin</code>; a <code>Host</code> outside the allow-list gets 421; and a single non-blocking operation lock answers a second request with 409.</li>
+    <li><strong>The web UI is loopback-only, and guarded.</strong> It listens on <code>127.0.0.1</code>; the launch token is compared in constant time and exchanged once for an <code>HttpOnly</code>, <code>SameSite=Strict</code> cookie. Every mutation needs the <code>X-NTFSMNT: 1</code> header and an allowed <code>Origin</code>; a <code>Host</code> outside the allow-list gets 421; and a single non-blocking operation lock per server process answers a second request with 409.</li>
     <li><strong>No write without a probe.</strong> A mount is proven by writing <code>.ntfsmnt-probe</code>, reading it back, and deleting it &mdash; then checking the mount point is owned by the invoking user, not root, before success is reported.</li>
     <li><strong>Hibernated and dirty volumes are refused by default.</strong> <code>--recover</code> replays the NTFS journal and <code>--remove-hiberfile</code> discards a hibernated Windows session; both are opt-in, and the second requires typing the volume label first.</li>
     <li><strong>No guesses on duplicate labels.</strong> If two volumes share a label, the command fails and lists the candidates instead of picking one.</li>
@@ -106,7 +112,7 @@
 
   <pre><code>./scripts/setup.sh --check</code></pre>
 
-  <p>Then install the tool by any of the three routes above and ask it what the host is missing:</p>
+  <p>Then install the tool by any of the four routes above and ask it what the host is missing:</p>
 
   <pre><code>ntfsmnt doctor</code></pre>
 
@@ -118,7 +124,13 @@
 
   <p>It prints <code>http://127.0.0.1:&lt;port&gt;/?token=&lt;random&gt;</code> and serves nothing outside loopback. The installed command is the same <code>web</code> subcommand, run as root.</p>
 
-  <p class="future"><strong>Future work.</strong> A signed, notarized companion app (which needs an Apple Developer ID) is not built. Nothing on this page depends on it.</p>
+  <p>For the no-Terminal route, install the menu-bar app once and use it from then on:</p>
+
+  <pre><code>bash scripts/install-app.sh --launch</code></pre>
+
+  <p>Click <strong>Set up&hellip;</strong> once (one password), grant Full Disk Access to <code>ntfsmnt.app</code>, then <strong>Start dashboard</strong>. Setup writes a root-owned CLI at <code>/usr/local/libexec/ntfsmnt</code> and a sudoers rule that names <code>web</code> only; the same installer removes both with <code>--uninstall</code>.</p>
+
+  <p class="future"><strong>Future work.</strong> The menu-bar app is unsigned. Notarization needs an Apple Developer ID; the walk-through is in <code>docs/APP.md</code>. A LaunchDaemon or XPC privileged helper is deliberately not used.</p>
 </section>
 
 <section id="audience">
@@ -127,7 +139,7 @@
     <li><strong>The maintainer&rsquo;s other Macs.</strong> One documented sequence, no memory required: clone, run the setup script, mount.</li>
     <li><strong>Technical Mac users.</strong> <code>uv tool install</code>, <code>pipx</code>, or Homebrew, plus a setup script that builds the one dependency macOS does not ship.</li>
     <li><strong>The open-source community.</strong> An MIT-licensed PyPI release with tests, issue tracking, and design specs and plans kept in the repository.</li>
-    <li><strong>Not yet: the double-click experience.</strong> A menu-bar companion app exists in the repo as an unsigned, build-from-source launcher (<code>bash scripts/build-app.sh</code>); notarization is a walk-through in <code>docs/APP.md</code> that needs an Apple Developer ID. The install is still a terminal command.</li>
+    <li><strong>Non-technical users, mostly.</strong> Install the menu-bar app (<code>bash scripts/install-app.sh</code>), click <strong>Set up&hellip;</strong> once, grant Full Disk Access, then <strong>Start dashboard</strong>: no Terminal and no password afterwards. The app is unsigned and built from source; a notarized download still needs an Apple Developer ID.</li>
   </ul>
 </section>
 
@@ -138,7 +150,7 @@
   <pre><code>uv sync --extra web
 uv run pytest -q</code></pre>
 
-  <p>That is 296 tests. The important ones use the injected-runner pattern: every subprocess effect goes through an injected callable (<code>run</code>, <code>read_mount_table</code>, <code>sleep</code>, the write probe), so the full mount and unmount sequences run without touching <code>/Volumes</code>.</p>
+  <p>That is 335 tests. The important ones use the injected-runner pattern: every subprocess effect goes through an injected callable (<code>run</code>, <code>read_mount_table</code>, <code>sleep</code>, the write probe), so the full mount and unmount sequences run without touching <code>/Volumes</code>. The npm proxy has its own <code>node:test</code> suite, run by CI.</p>
 
   <p>The safety invariants and the web-layer invariants live in <a href="https://github.com/AkshayHarti/ntfs-mounter/blob/main/AGENTS.md">AGENTS.md</a>. A good change adds tests in that injected-runner style and keeps the <a href="https://github.com/AkshayHarti/ntfs-mounter/blob/main/README.md">README</a> and AGENTS.md honest about what is verified and what is not.</p>
 

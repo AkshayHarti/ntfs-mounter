@@ -12,6 +12,7 @@ jobs:
       - run: uv sync --group dev --extra web
       - run: uv run pytest -q
       - run: node --check ntfsmnt/web/page/app.js
+      - run: npm --prefix npm test
   build:
     runs-on: ubuntu-24.04
     steps:

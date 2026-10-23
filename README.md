@@ -66,8 +66,8 @@ device that cannot be opened.
 
 ## Install
 
-Four blocks: the native prerequisites once per Mac, the CLI from PyPI, a
-Homebrew tap formula, and a checkout for contributors.
+Five blocks: the native prerequisites once per Mac, the CLI from PyPI, a
+Homebrew tap formula, an npm proxy for `npx`, and a checkout for contributors.
 
 ### 1. Prerequisites
 
@@ -122,7 +122,21 @@ The tap formula refuses to install while the macFUSE-linked
 `gromgit/fuse/ntfs-3g-mac` is installed (both want `/opt/homebrew/bin/ntfs-3g`);
 uninstall that one first.
 
-### 4. From a checkout (development)
+### 4. From npm (npx)
+
+```bash
+npx ntfsmnt --help        # or: npm install -g ntfsmnt
+```
+
+The npm package is a dependency-free proxy: it finds the real Python CLI
+(Homebrew, `uv tool`, the root-owned copy, `~/.local/bin`, then `PATH`) and
+hands it your arguments unchanged; if none is installed it falls back to
+`uvx --from "ntfsmnt[web]" ntfsmnt`. It does not reimplement anything, and the
+macOS prerequisites above still apply. The first npm publish lands on the next
+`v*` tag; before that, `npm link ./npm` from a checkout. See
+[docs/NPM.md](docs/NPM.md).
+
+### 5. From a checkout (development)
 
 ```bash
 git clone https://github.com/AkshayHarti/ntfs-mounter.git
@@ -398,6 +412,52 @@ after it exits. The CLI remains the source of truth — the page calls the same
 mount, unmount, and eject code, and `ntfsmnt list` is always the authoritative
 view of the current state regardless of what a stale page shows.
 
+## Menu-bar app
+
+`scripts/install-app.sh` builds and installs `ntfsmnt.app` (unsigned), then the
+menu bar owns the dashboard:
+
+```bash
+bash scripts/install-app.sh --launch     # /Applications; --user for ~/Applications
+```
+
+First run:
+
+1. Click **Set up…** — Terminal opens the bundled installer and asks for your
+   password once. It creates a root-owned CLI at
+   `/usr/local/libexec/ntfsmnt` and the sudoers rule below.
+2. Grant the app **Full Disk Access** (menu item **Grant Full Disk Access…**
+   opens the pane), then relaunch the app.
+
+After that, **Start dashboard** opens the browser with no Terminal and no
+password. **Stop dashboard** and **Quit** terminate only the server this app
+started.
+
+What setup installs:
+
+```
+/usr/local/libexec/ntfsmnt                 root-owned venv with ntfsmnt[web]
+/etc/sudoers.d/ntfsmnt                     0440 root:wheel
+%admin ALL=(root) NOPASSWD: /usr/local/libexec/ntfsmnt/bin/ntfsmnt web *
+```
+
+The grant covers **only the `web` subcommand of a root-owned binary**. It is a
+deliberate, opt-in tradeoff: any admin user on the Mac can start a root web
+server bound to loopback without a password. The web layer's token→cookie
+exchange, `X-NTFSMNT`/Origin check, `Host` allow-list, and a single-operation
+lock per server process still apply, and the server exits with the app. The
+lock serializes requests in one server, not across the host. Remove the grant and the venv
+with:
+
+```bash
+sudo ./scripts/install-privileged.sh --uninstall   # removes the rule first
+```
+
+The app is not notarized (no Developer ID yet); building it locally avoids the
+quarantine prompt. Signing and notarization steps are in
+[docs/APP.md](docs/APP.md). Terminal use of `sudo ntfsmnt web` still works and
+keeps the terminal's Full Disk Access attribution instead of the app's.
+
 ## JSON output
 
 Every command accepts `--json`. Output goes to stdout as a single JSON value;
@@ -491,6 +551,12 @@ Consequences worth knowing:
 - The command never uses `osascript ... with administrator privileges`. See the
   TCC note below.
 
+The menu-bar app is the one sanctioned exception to "you type the password in
+your terminal": after `scripts/install-privileged.sh`, it starts
+`sudo -n /usr/local/libexec/ntfsmnt/bin/ntfsmnt web` under the narrow rule in
+[Menu-bar app](#menu-bar-app). Nothing else skips the prompt, and the app never
+runs `mount`, `unmount`, or `eject` itself.
+
 ## TCC / Full Disk Access
 
 macOS attributes raw disk access to the *responsible process*, which is your
@@ -500,6 +566,10 @@ kernel returns `Operation not permitted` (`EPERM`) even for `sudo`.
 Grant Full Disk Access to the terminal app you use (System Settings → Privacy &
 Security → Full Disk Access), then quit and reopen that app. `doctor` reports
 `device-access` failure with a `fix:` line when this is missing.
+
+If you use the menu-bar app, grant Full Disk Access to **ntfsmnt.app** instead:
+the root server it starts is attributed to the app, not to Terminal. Both
+grants can coexist; each covers the way you launched the server.
 
 `osascript -e 'do shell script ... with administrator privileges'` is
 deliberately not used. The privileged work is then attributed to `osascript`,
@@ -652,7 +722,7 @@ uv run pytest -q
 
 Without `--extra web` the FastAPI/Jinja API, page, and schema tests skip; the
 service, models, and config tests still run.
-The suite has 296 tests and never touches hardware. Subprocess effects
+The suite has 335 tests and never touches hardware. Subprocess effects
 (`diskutil`, `ntfs-3g`, `mount`, `pgrep`, `kill`, `sleep`) are injected as
 callables, and the mount-point creation, write probe, and ownership `stat` are
 monkeypatched in tests that exercise the orchestration.
@@ -681,9 +751,18 @@ and the stack if you no longer need it:
 
 ```bash
 uv tool uninstall ntfsmnt                    # or: pipx uninstall ntfsmnt
+npm uninstall -g ntfsmnt                     # if installed via npm
 brew uninstall AkshayHarti/ntfs-mounter/ntfsmnt        # if installed via the tap
 brew uninstall AkshayHarti/ntfs-mounter/ntfs-3g-fuse-t # if installed via the tap
 brew uninstall --cask fuse-t
+```
+
+If you installed the menu-bar app, remove its standing grant before deleting the
+app (the installer removes the sudoers rule first, then the root-owned venv):
+
+```bash
+sudo ./scripts/install-privileged.sh --uninstall
+rm -rf /Applications/ntfsmnt.app             # or ~/Applications
 ```
 
 `ntfs-3g` from the setup script was built from source and is not managed by this
