@@ -200,7 +200,9 @@ fix_shebangs() {
     first=$(head -n 1 "$script" 2>/dev/null || true)
     case $first in
       "#!$old/"*)
-        sed -i '' "1s|#!$old/|#!$new/|" "$script"
+        # -i.bak is the portable form: BSD and GNU sed disagree about -i ''.
+        sed -i.bak "1s|#!$old/|#!$new/|" "$script"
+        rm -f "$script.bak"
         ;;
     esac
   done
