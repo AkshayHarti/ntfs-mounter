@@ -4,7 +4,7 @@ from subprocess import CalledProcessError
 
 import pytest
 
-from ntfsmnt import mounter
+from ntfsmnt import mounter, paths
 from ntfsmnt.models import Device
 from ntfsmnt.mounttable import MountEntry
 from ntfsmnt.mounter import MountFailed, _write_probe, mount_volume
@@ -52,7 +52,7 @@ HD2 = Device(
     mount_point=None,
 )
 HD2_MOUNT_POINT = "/Volumes/HD2"
-NTFS3G = "/usr/local/bin/ntfs-3g"
+NTFS3G = paths.NTFS3G
 
 
 def ro_entry(device, mount_point):
