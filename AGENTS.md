@@ -13,7 +13,7 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 ## Commands
 
 - Install deps: `uv sync` (add `--extra web` for the browser UI and its tests)
-- Test: `uv run pytest -q` (395 tests; without `--extra web` the FastAPI/Jinja
+- Test: `uv run pytest -q` (403 tests; without `--extra web` the FastAPI/Jinja
   API, page, and schema tests skip, while the service, models, and config tests
   run)
 - Prerequisite check: `./scripts/setup.sh --check` (read-only, exits 0 anywhere)
@@ -61,6 +61,8 @@ ntfsmnt/
     models.py      frozen dataclasses shared by service and schemas
     page/          index.html + fragments, app.css, app.js, vendored htmx
                    agent.html + agent.js + agent.css (the agentic surface)
+                   opui-lang.js (the renderer's parser, mirrored from
+                   agent/openui.py; run under node by test_agent_page_js.py)
 
 tests/
   test_*.py        unit tests with injected runners
@@ -247,7 +249,8 @@ a prompt. Do not weaken these.
 - `/agent` — the agentic UI. The agent composes OpenUI Lang from the fixed
   registry in `ntfsmnt/agent/library.py`, streamed over SSE as AG-UI events
   (`ntfsmnt/agent/events.py`, `ntfsmnt/web/agent.py`); the renderer is
-  `ntfsmnt/web/page/agent.js`. Default planner is deterministic; `--agent-llm`
+  `ntfsmnt/web/page/agent.js`, which parses with `page/opui-lang.js`.
+  Default planner is deterministic; `--agent-llm`
   enables an OpenAI-compatible model (validated output, deterministic
   fallback). The agent layer never mounts, unmounts, or ejects: generated
   buttons call the existing authenticated routes. Do not add an execution

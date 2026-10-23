@@ -10,32 +10,41 @@
 <body>
   <header class="masthead">
     <div class="masthead__identity">
-      <h1 class="wordmark"><a href="/">ntfsmnt</a></h1>
+      <h1 class="wordmark"><a href="/agent">ntfsmnt</a></h1>
       <span class="badge badge--root">agent</span>
-      <span class="badge" id="generator-badge" hidden></span>
     </div>
     <span class="live" id="live" data-live="connecting">live</span>
   </header>
 
-  <main class="agent">
-    <section class="canvas" id="canvas" aria-label="Generated interface">
-      <p class="canvas__empty">Starting the agent…</p>
-    </section>
-
-    <aside class="chat" aria-label="Conversation">
-      <div class="chat__log" id="log" role="log" aria-live="polite"></div>
-      <form class="chat__composer" id="composer">
-        <textarea id="input" rows="2" placeholder="Ask: “mount ELEMENTS”, “run doctor”, “what can you do?”" aria-label="Message the agent"></textarea>
-        <button type="submit">Send</button>
-      </form>
-      <p class="chat__note">The agent prepares actions; you confirm them. For destructive
-        options (<code>--recover</code>, <code>--remove-hiberfile</code>) use the
-        <a href="/">classic dashboard</a>.</p>
-    </aside>
-  </main>
-
   <div id="alert" role="alert" class="alert" hidden></div>
 
+  <main class="agent">
+    <nav class="agentnav" aria-label="Prompts and pages">
+      <button type="button" class="chip" data-ask="show me the volumes">Volumes</button>
+      <button type="button" class="chip" data-ask="run the doctor">Doctor</button>
+      <button type="button" class="chip" data-ask="what can you do?">What can you do?</button>
+      <a class="chip" href="/">Classic dashboard</a>
+    </nav>
+
+    <div class="thread" id="feed" role="log" aria-live="polite"
+         aria-label="Conversation"></div>
+
+    <details class="logpanel" id="activity">
+      <summary>Agent activity <span id="activity-count"></span></summary>
+      <div class="logpanel__body">
+        <button type="button" class="chip" id="activity-refresh">Refresh</button>
+        <ul class="activity" id="activity-list"></ul>
+      </div>
+    </details>
+
+    <form class="composer" id="composer">
+      <textarea id="input" rows="2" aria-label="Ask the agent"
+                placeholder="“mount HD1”, “run the doctor”, “what can you do?”"></textarea>
+      <button type="submit">Send</button>
+    </form>
+  </main>
+
+  <script src="/static/opui-lang.js" defer></script>
   <script src="/static/agent.js" defer></script>
 </body>
 </html>
