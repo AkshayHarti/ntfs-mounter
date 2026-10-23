@@ -35,43 +35,84 @@ Verified on Apple Silicon, macOS 26.5.2 (25F84).
 | macOS | 26.x on Apple Silicon | Intel untested |
 | Python | ≥ 3.12 | no runtime third-party dependencies |
 | [uv](https://docs.astral.sh/uv/) | any recent version | for install and development |
-| FUSE-T | 1.2.9, `/usr/local/lib/libfuse-t.dylib` | `brew install --cask fuse-t` |
-| ntfs-3g | 2022.10.3, `/usr/local/bin/ntfs-3g` | must link `libfuse-t` |
+| FUSE-T | 1.2.9, `/usr/local/lib/libfuse-t.dylib` | installed by [`scripts/setup.sh`](scripts/setup.sh) |
+| ntfs-3g | 2022.10.3 (built from `edge`), `/usr/local/bin/ntfs-3g` | FUSE-T fork, must link `libfuse-t`; same script |
 | Terminal | Full Disk Access granted | see [TCC / Full Disk Access](#tcc--full-disk-access) |
 
-`ntfs-3g` here is the FUSE-T fork from
-<https://github.com/macos-fuse-t/ntfs-3g>, not the macFUSE build and not a
-Homebrew build. It is not installed by this repo; build it from that fork so it
-links against `libfuse-t`, install it at `/usr/local/bin/ntfs-3g`, and check:
+[`scripts/setup.sh`](scripts/setup.sh) installs both native prerequisites: the
+FUSE-T cask with `brew install --cask fuse-t`, and the FUSE-T-linked `ntfs-3g`
+built from <https://github.com/macos-fuse-t/ntfs-3g> (branch `edge`, overridable
+with `NTFS3G_REF`) into `/usr/local/bin/ntfs-3g`. It installs the build tooling
+(`autoconf`, `automake`, `libtool`, `pkgconf`) through Homebrew when missing and
+prints the resolved `ntfs-3g` commit. Run `./scripts/setup.sh --check` first to
+see what is missing without changing anything.
+
+To build `ntfs-3g` by hand instead:
 
 ```bash
+git clone https://github.com/macos-fuse-t/ntfs-3g.git
+cd ntfs-3g
+./autogen.sh && ./configure && make
+sudo make install
 otool -L /usr/local/bin/ntfs-3g | grep libfuse-t
-uv run ntfsmnt doctor
 ```
 
-`doctor` reports a missing FUSE-T, an `ntfs-3g` that is not linked against
-FUSE-T, a missing root, and a device that cannot be opened.
+`ntfs-3g` here is the FUSE-T fork, not the macFUSE build and not a Homebrew
+build. On macOS the fork hardcodes `-I/usr/local/include/fuse` and `-lfuse-t`
+in `src/Makefile.am`, so the build needs no extra flags (configure only uses
+pkg-config to locate the library directory). `doctor` reports a missing
+FUSE-T, an `ntfs-3g` that is not linked against FUSE-T, a missing root, and a
+device that cannot be opened.
 
 ## Install
 
-From a checkout:
+Three blocks: the native prerequisites once per Mac, the CLI itself, and a
+checkout for contributors.
+
+### 1. Prerequisites
+
+From a checkout, run the setup script:
 
 ```bash
-git clone git@github.com:AkshayHarti/ntfs-mounter.git
+git clone https://github.com/AkshayHarti/ntfs-mounter.git
 cd ntfs-mounter
-uv sync
+./scripts/setup.sh
+```
+
+It installs FUSE-T and builds `ntfs-3g` against it, calling `sudo` only for
+`make install`; the FUSE-T cask asks for an administrator password through its
+own installer. It is idempotent — satisfied steps are skipped — and
+`./scripts/setup.sh --check` reports the state without changing anything. It
+ends with the Full Disk Access reminder; that grant is manual, see
+[TCC / Full Disk Access](#tcc--full-disk-access).
+
+### 2. The CLI from PyPI
+
+```bash
+uv tool install "ntfsmnt[web]"
+ntfsmnt doctor
+```
+
+`pipx install "ntfsmnt[web]"` is the alternative if you use pipx. Drop `[web]`
+for the CLI without the browser UI. `ntfsmnt doctor` reports FUSE-T, `ntfs-3g`,
+root, and device access; run unprivileged, the `root` and `device-access` checks
+fail by design. `mount`, `unmount`, and `eject` re-exec through `sudo` from your
+terminal — see [Privileges and the sudo re-exec](#privileges-and-the-sudo-re-exec)
+— which is why that terminal needs Full Disk Access.
+
+### 3. From a checkout (development)
+
+```bash
+git clone https://github.com/AkshayHarti/ntfs-mounter.git
+cd ntfs-mounter
+uv sync --extra web
 uv run ntfsmnt list
 ```
 
-To put the `ntfsmnt` command on your `PATH`:
-
-```bash
-uv tool install --editable .
-ntfsmnt list
-```
-
-The installed command re-execs through `sudo` using the interpreter of the
-environment it was installed into, so it keeps working outside the checkout.
+`uv run ntfsmnt ...` runs the checkout's code. `uv tool install --editable .`
+puts that same checkout on your `PATH`; the installed command re-execs through
+`sudo` using the interpreter of the environment it was installed into, so it
+keeps working outside the checkout.
 
 ## Commands
 
@@ -589,7 +630,7 @@ uv run pytest -q
 
 Without `--extra web` the FastAPI/Jinja API, page, and schema tests skip; the
 service, models, and config tests still run.
-The suite has 274 tests and never touches hardware. Subprocess effects
+The suite has 284 tests and never touches hardware. Subprocess effects
 (`diskutil`, `ntfs-3g`, `mount`, `pgrep`, `kill`, `sleep`) are injected as
 callables, and the mount-point creation, write probe, and ownership `stat` are
 monkeypatched in tests that exercise the orchestration.
@@ -610,17 +651,24 @@ Unmount any read-write volume first, so FUSE-T is not removed under a live NFS
 mount:
 
 ```bash
-uv run ntfsmnt unmount HD1
+ntfsmnt unmount HD1
 ```
 
-Then remove the command, if you installed it with `uv tool install`, and the
-stack if you no longer need it:
+Then remove the command, if you installed it with `uv tool install` or `pipx`,
+and the stack if you no longer need it:
 
 ```bash
-uv tool uninstall ntfsmnt
+uv tool uninstall ntfsmnt     # or: pipx uninstall ntfsmnt
 brew uninstall --cask fuse-t
 ```
 
 `ntfs-3g` was built from source and is not managed by this repo; remove it with
-the build directory's install rules if you want it gone. Deleting the checkout
-removes the CLI source and its virtual environment.
+the build directory's install rules if you want it gone. The build directory is
+a cache, so it survives uninstalling the CLI:
+
+```bash
+rm -rf ~/Library/Caches/ntfsmnt/ntfs-3g
+```
+
+(`$XDG_CACHE_HOME/ntfsmnt/ntfs-3g` when `XDG_CACHE_HOME` is set.) Deleting the
+checkout removes the CLI source and its virtual environment.
