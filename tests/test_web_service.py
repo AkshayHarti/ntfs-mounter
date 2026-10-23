@@ -86,6 +86,36 @@ def test_empty_label_disables_mount():
     assert "label" in (mount.reason or "").lower()
 
 
+def test_busy_device_access_warns_without_disabling_actions(monkeypatch):
+    monkeypatch.setattr(service_module, "run_checks", lambda env: [
+        Check("device-access", False,
+              "ntfs-3g.probe failed on /dev/disk4s1 with exit code 16: "
+              "Error opening '/dev/disk4s1': Resource busy",
+              "The volume is mounted; unmount it first, then retry",
+              advisory=True),
+    ])
+    svc = make_service([make_volume(mounts=[RO], mount_point="/Volumes/HD1")])
+    doc = svc.refresh_doctor()
+    assert doc.status == "warning"
+    assert [(f.check, f.severity) for f in doc.findings] == [("device-access", "warning")]
+    view = svc.snapshot().volumes[0]
+    assert {a.name: a.enabled for a in view.actions}["mount"] is True
+
+
+def test_permission_denied_device_access_still_blocks(monkeypatch):
+    monkeypatch.setattr(service_module, "run_checks", lambda env: [
+        Check("device-access", False,
+              "ntfs-3g.probe failed on /dev/disk4s1 with exit code 19: "
+              "Error opening read-only '/dev/disk4s1': Permission denied",
+              "Run as root via sudo from a terminal that has Full Disk Access",
+              advisory=False),
+    ])
+    svc = make_service([make_volume()])
+    doc = svc.refresh_doctor()
+    assert doc.status == "blocker"
+    assert [f.severity for f in doc.findings] == ["blocker"]
+
+
 def test_doctor_blocker_disables_actions():
     doc = DoctorStatus(
         "blocker", "now",

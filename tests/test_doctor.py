@@ -47,6 +47,23 @@ def test_permission_denied_as_user_suggests_sudo():
     assert "Permission denied" in dev.detail
 
 
+def test_busy_probe_is_advisory():
+    probe = "Error opening '/dev/disk4s1': Resource busy"
+    checks = run_checks(make_env(run=lambda argv: (16, probe)))
+    dev = next(c for c in checks if c.name == "device-access")
+    assert not dev.ok
+    assert dev.advisory is True
+    assert "busy" in dev.detail.lower()
+
+
+def test_permission_denied_probe_is_not_advisory():
+    probe = "Error opening read-only '/dev/disk4s1': Permission denied"
+    checks = run_checks(make_env(euid=501, run=lambda argv: (19, probe)))
+    dev = next(c for c in checks if c.name == "device-access")
+    assert not dev.ok
+    assert dev.advisory is False
+
+
 def test_generic_probe_failure_has_no_fix():
     checks = run_checks(make_env(run=lambda argv: (5, "\nError: something odd happened\n")))
     dev = next(c for c in checks if c.name == "device-access")

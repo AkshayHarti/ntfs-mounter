@@ -24,6 +24,10 @@ class Check:
     ok: bool
     detail: str
     fix: str | None = None
+    # A failed check that is expected in normal operation: the probed device is
+    # mounted, so the probe reports busy. It still fails the CLI doctor (the
+    # access cannot be verified yet) but must not disable web actions.
+    advisory: bool = False
 
 
 def _check_macos() -> Check:
@@ -113,7 +117,10 @@ def _check_device_access(env: Env) -> Check:
     if rc == 0:
         return Check("device-access", True, f"{device} is readable/writable")
     detail = _probe_detail(device, rc, stderr)
-    return Check("device-access", False, detail, _probe_guidance(env, stderr))
+    return Check(
+        "device-access", False, detail, _probe_guidance(env, stderr),
+        advisory="busy" in stderr.lower(),
+    )
 
 
 def _check_licence() -> Check:

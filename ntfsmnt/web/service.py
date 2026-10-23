@@ -90,7 +90,11 @@ class Service:
         checks = run_checks(env)
         findings = tuple(
             Finding(
-                severity="blocker" if c.name in HARD_CHECK_NAMES else "warning",
+                severity=(
+                    "blocker"
+                    if c.name in HARD_CHECK_NAMES and not c.advisory
+                    else "warning"
+                ),
                 check=c.name, message=c.detail, fix=c.fix,
             )
             for c in checks if not c.ok
