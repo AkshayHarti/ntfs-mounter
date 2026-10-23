@@ -1,0 +1,271 @@
+/* ntfsmnt — one page, one stylesheet, no JavaScript, no external requests. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #fbfaf7;
+  --fg: #1c1b19;
+  --muted: #605e57;
+  --rule: #e2ded6;
+  --code-bg: #f2efe9;
+  --accent: #a4471b;
+  --measure: 44rem;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131312;
+    --fg: #e9e6df;
+    --muted: #a3a099;
+    --rule: #2b2a27;
+    --code-bg: #1c1b19;
+    --accent: #e3a373;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  font-kerning: normal;
+  -webkit-font-smoothing: antialiased;
+}
+
+.site-header,
+main,
+.site-footer {
+  max-width: var(--measure);
+  margin-inline: auto;
+  padding-inline: 1.25rem;
+}
+
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  padding-block: 1.5rem 1rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.wordmark {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  font-size: 0.9rem;
+}
+
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  padding: 0.5rem 1rem;
+  background: var(--bg);
+  color: var(--accent);
+}
+
+.skip-link:focus {
+  left: 1rem;
+  top: 1rem;
+  z-index: 1;
+}
+
+main {
+  padding-block: 2.5rem 1rem;
+}
+
+h1 {
+  margin: 0 0 1rem;
+  font-size: clamp(1.9rem, 5vw, 2.9rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-weight: 650;
+  text-wrap: balance;
+}
+
+h2 {
+  margin: 3.5rem 0 1rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+  font-size: 1.35rem;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+.option-title {
+  margin: 1.75rem 0 0.5rem;
+  padding-top: 0;
+  border-top: 0;
+  font-size: 1.02rem;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+p {
+  margin: 0 0 1rem;
+}
+
+.lede {
+  font-size: 1.15rem;
+  line-height: 1.55;
+}
+
+.evidence {
+  margin-bottom: 2rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.scope,
+.future {
+  padding-left: 0.9rem;
+  border-left: 2px solid var(--rule);
+  color: var(--muted);
+}
+
+.option {
+  margin-bottom: 1.75rem;
+}
+
+.option p:last-child {
+  margin-bottom: 0;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  background: var(--code-bg);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+
+pre {
+  margin: 0 0 0.75rem;
+  padding: 0.85rem 1rem;
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.commands {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1.25rem;
+  margin: 0 0 1.25rem;
+}
+
+.commands dt {
+  font-family: var(--mono);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.commands dd {
+  margin: 0;
+}
+
+.invariants,
+.audience {
+  margin: 0 0 1rem;
+  padding-left: 1.1rem;
+}
+
+.invariants li,
+.audience li {
+  margin-bottom: 0.8rem;
+}
+
+.invariants strong,
+.audience strong {
+  font-weight: 600;
+}
+
+.site-footer {
+  margin-top: 3.5rem;
+  padding-block: 1.5rem 3rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.9rem;
+}
+
+.footer-line {
+  margin: 0 0 0.35rem;
+}
+
+.footer-line span {
+  margin-inline: 0.4rem;
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+@media (max-width: 34rem) {
+  body {
+    font-size: 1rem;
+  }
+
+  h2 {
+    margin-top: 2.75rem;
+  }
+
+  .commands {
+    grid-template-columns: 1fr;
+    gap: 0.1rem;
+  }
+
+  .commands dd {
+    margin-bottom: 0.75rem;
+  }
+}
