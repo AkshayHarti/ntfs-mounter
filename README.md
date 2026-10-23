@@ -66,8 +66,8 @@ device that cannot be opened.
 
 ## Install
 
-Three blocks: the native prerequisites once per Mac, the CLI itself, and a
-checkout for contributors.
+Four blocks: the native prerequisites once per Mac, the CLI from PyPI, a
+Homebrew tap formula, and a checkout for contributors.
 
 ### 1. Prerequisites
 
@@ -100,7 +100,29 @@ fail by design. `mount`, `unmount`, and `eject` re-exec through `sudo` from your
 terminal — see [Privileges and the sudo re-exec](#privileges-and-the-sudo-re-exec)
 — which is why that terminal needs Full Disk Access.
 
-### 3. From a checkout (development)
+### 3. The CLI from Homebrew
+
+```bash
+brew tap AkshayHarti/ntfs-mounter https://github.com/AkshayHarti/ntfs-mounter
+brew install AkshayHarti/ntfs-mounter/ntfsmnt
+```
+
+One honest sentence about the URL: the tap repo is named `ntfs-mounter`, not
+`homebrew-ntfs-mounter`, because tap and project live in this same repo — so
+plain `brew tap AkshayHarti/ntfs-mounter` would look for a `homebrew-ntfs-mounter`
+repo on GitHub and `brew tap` needs the full URL. The tap installs two
+formulae: `ntfsmnt` and `ntfs-3g-fuse-t`, a port of the FUSE-T-linked `ntfs-3g`
+the setup script builds by hand. Details, including how they differ from
+`scripts/setup.sh` and what is verified, are in
+[docs/HOMEBREW.md](docs/HOMEBREW.md). On Homebrew 7+, third-party taps must be
+trusted before their formulae load (`brew trust --tap AkshayHarti/ntfs-mounter`
+after `brew tap` errors with a trust warning).
+
+The tap formula refuses to install while the macFUSE-linked
+`gromgit/fuse/ntfs-3g-mac` is installed (both want `/opt/homebrew/bin/ntfs-3g`);
+uninstall that one first.
+
+### 4. From a checkout (development)
 
 ```bash
 git clone https://github.com/AkshayHarti/ntfs-mounter.git
@@ -630,7 +652,7 @@ uv run pytest -q
 
 Without `--extra web` the FastAPI/Jinja API, page, and schema tests skip; the
 service, models, and config tests still run.
-The suite has 284 tests and never touches hardware. Subprocess effects
+The suite has 295 tests and never touches hardware. Subprocess effects
 (`diskutil`, `ntfs-3g`, `mount`, `pgrep`, `kill`, `sleep`) are injected as
 callables, and the mount-point creation, write probe, and ownership `stat` are
 monkeypatched in tests that exercise the orchestration.
@@ -658,11 +680,14 @@ Then remove the command, if you installed it with `uv tool install` or `pipx`,
 and the stack if you no longer need it:
 
 ```bash
-uv tool uninstall ntfsmnt     # or: pipx uninstall ntfsmnt
+uv tool uninstall ntfsmnt                    # or: pipx uninstall ntfsmnt
+brew uninstall AkshayHarti/ntfs-mounter/ntfsmnt        # if installed via the tap
+brew uninstall AkshayHarti/ntfs-mounter/ntfs-3g-fuse-t # if installed via the tap
 brew uninstall --cask fuse-t
 ```
 
-`ntfs-3g` was built from source and is not managed by this repo; remove it with
+`ntfs-3g` from the setup script was built from source and is not managed by this
+repo; remove it with
 the build directory's install rules if you want it gone. The build directory is
 a cache, so it survives uninstalling the CLI:
 

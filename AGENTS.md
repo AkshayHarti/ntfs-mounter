@@ -13,12 +13,15 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 ## Commands
 
 - Install deps: `uv sync` (add `--extra web` for the browser UI and its tests)
-- Test: `uv run pytest -q` (284 tests; without `--extra web` the FastAPI/Jinja
+- Test: `uv run pytest -q` (295 tests; without `--extra web` the FastAPI/Jinja
   API, page, and schema tests skip, while the service, models, and config tests
   run)
 - Prerequisite check: `./scripts/setup.sh --check` (read-only, exits 0 anywhere)
 - Prerequisites install: `./scripts/setup.sh` (FUSE-T cask + FUSE-T-linked ntfs-3g)
 - Release: see `docs/RELEASING.md`; version lives only in `ntfsmnt/__init__.py`
+- App build: `bash scripts/build-app.sh` (unsigned bundle in `dist/`)
+- Site preview: `python3 -m http.server -d site` then http://localhost:8000
+- Homebrew: `docs/HOMEBREW.md` (formulas + local-tap test commands)
 - Manual acceptance: `tests/manual/acceptance.md` (real hardware, root, Full
   Disk Access terminal)
 - Build/run: `uv run ntfsmnt ...`
@@ -33,6 +36,8 @@ ntfsmnt/
   diskutil.py      plist parsing for diskutil list/info
   mounttable.py    parsing of `mount` output, including fuse-t: lines
   identity.py      corroborate a fuse-t: mount with its serving ntfs-3g process
+  paths.py         ntfs-3g/probe resolution: NTFSMNT_NTFS3G override, FUSE-T
+                   prefixes (/usr/local, /opt/homebrew), then PATH
   volumes.py       Volume model, build_volumes, resolve by label/uuid/device/mount
   options.py       ntfs-3g argument assembly and stderr classification
   doctor.py        environment checks with actionable fixes
@@ -53,6 +58,7 @@ tests/
   test_*.py        unit tests with injected runners
   test_packaging.py    pyproject metadata, licence, single-source version
   test_setup_script.py read-only checks of scripts/setup.sh
+  test_paths.py    ntfs-3g resolution: override, candidates, PATH, probe
   web_helpers.py   shared builders for the web tests
   web_render.py    Jinja template rendering helpers for the web tests
   fixtures/        captured diskutil / mount output
@@ -62,12 +68,24 @@ tests/
 
 scripts/
   setup.sh         idempotent FUSE-T + ntfs-3g installer, `--check` is read-only
+  build-app.sh     compile + assemble + ad-hoc-sign the menu-bar app
+  sign-app.sh      Developer ID signing + notarization + stapling (needs notarytool)
   ntfsmnt-dryrun.zsh  older read-only environment report
+
+Formula/
+  ntfs-3g-fuse-t.rb  FUSE-T-linked ntfs-3g formula (`conflicts_with "ntfs-3g-mac"`)
+  ntfsmnt.rb         virtualenv formula of the PyPI sdist incl. the web extra
+
+app/               menu-bar companion app source (Info.plist + Swift)
+site/              static GitHub Pages site (no JS, no build step)
 
 docs/
   specs/           design specs, one per feature
   plans/           implementation plans paired with the specs
   RELEASING.md     pending publisher, version bump, tag, rollback
+  HOMEBREW.md      the two formulas and how they differ from setup.sh
+  APP.md           what the menu-bar app does, unsigned run, notarization
+  SITE.md          the Pages site, local preview, enablement
 ```
 
 ## Module responsibilities
@@ -80,6 +98,10 @@ docs/
   device must decide.
 - `options.py` — build ntfs-3g options, classify failures (hibernated, dirty,
   busy, EPERM).
+- `paths.py` — find the `ntfs-3g` binary and `ntfs-3g.probe`. Candidates beat
+  PATH so a root process (sudo `env_reset`) can still resolve them; candidate
+  order beats Homebrew's macFUSE-linked `ntfs-3g-mac`, which shares the binary
+  name in `/opt/homebrew/bin`.
 - `doctor.py` — check the host; hard failures are `fuse-t`, `ntfs-3g`, `root`,
   `device-access`.
 - `mounter.py` — unmount Apple's mount, run ntfs-3g, evict Apple remounts,

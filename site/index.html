@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>ntfsmnt — read-write NTFS on macOS</title>
+<meta name="description" content="Mount NTFS volumes read-write on macOS through FUSE-T and the FUSE-T build of ntfs-3g. A command-line tool and a loopback-only web UI, both delegating to the same code. MIT licensed, Python 3.12 or newer.">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131312" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <p class="wordmark">ntfsmnt</p>
+  <nav aria-label="Sections">
+    <a href="#install">Install</a>
+    <a href="#problem">The problem</a>
+    <a href="#solution">The solution</a>
+    <a href="#design">Design</a>
+    <a href="#run">How to run</a>
+    <a href="#audience">Audience</a>
+    <a href="#contribute">Contribute</a>
+  </nav>
+</header>
+
+<main id="main">
+
+<section id="install" class="hero">
+  <h1>Read-write NTFS on macOS, from the command line.</h1>
+  <p class="lede">ntfsmnt replaces Apple&rsquo;s read-only NTFS mount for one volume at a time with an ntfs-3g mount served by FUSE-T: no kernel extension, no SIP change, no reboot.</p>
+  <p class="evidence">295 tests &middot; MIT licence &middot; Python &ge; 3.12 &middot; macOS only, verified on Apple Silicon (macOS 26.5.2)</p>
+
+  <div class="install">
+    <article class="option">
+      <h2 class="option-title">From a checkout</h2>
+      <pre><code>git clone https://github.com/AkshayHarti/ntfs-mounter.git &amp;&amp; cd ntfs-mounter &amp;&amp; ./scripts/setup.sh</code></pre>
+      <p>Installs the native prerequisites &mdash; the FUSE-T cask and an ntfs-3g built and linked against it &mdash; then prints the Full Disk Access reminder. Idempotent: satisfied steps are skipped, and <code>./scripts/setup.sh --check</code> reports state without changing anything. From the same checkout, <code>uv sync --extra web</code> gets the tool itself.</p>
+    </article>
+
+    <article class="option">
+      <h2 class="option-title">From PyPI</h2>
+      <pre><code>uv tool install "ntfsmnt[web]"</code></pre>
+      <p>The CLI and the local web UI, installed from PyPI. <code>pipx install "ntfsmnt[web]"</code> is the equivalent; drop <code>[web]</code> for the CLI alone. The native prerequisites from the first option are still required.</p>
+    </article>
+
+    <article class="option">
+      <h2 class="option-title">Homebrew</h2>
+      <pre><code>brew tap AkshayHarti/ntfs-mounter https://github.com/AkshayHarti/ntfs-mounter &amp;&amp; brew install AkshayHarti/ntfs-mounter/ntfsmnt</code></pre>
+      <p>The tap lives inside this repository rather than a separate <code>homebrew-*</code> one, so it has to be tapped by URL. The formulas need the FUSE-T cask; run <code>brew install --cask fuse-t</code> first if it is not installed, and on Homebrew 7+ trust the third-party tap once with <code>brew trust --tap AkshayHarti/ntfs-mounter</code>.</p>
+    </article>
+  </div>
+</section>
+
+<section id="problem">
+  <h2>The problem</h2>
+  <p>macOS mounts NTFS volumes read-only. Its built-in FSKit driver is the safe default, and for most people it is the end of the story &mdash; until a disk formatted on Windows needs a file written to it.</p>
+  <p>The usual answers are to pay for a commercial driver or to trust a hand-rolled bundle of binaries. The first costs money and is not open source. The second is a way to lose data: an NTFS driver runs with enough privilege to corrupt a filesystem when the mount options, the device, or the teardown are wrong.</p>
+  <p>Nothing here touches a drive without an explicit command. There is no daemon and no launch agent: a volume is mounted, unmounted, or ejected only when you ask for it &mdash; in the terminal, or with a button in the local web UI.</p>
+  <p class="scope">Scope, stated plainly: verified on Apple Silicon running macOS 26.x. Intel Macs are untested, and Windows, Linux, and non-NTFS filesystems are out of scope.</p>
+</section>
+
+<section id="solution">
+  <h2>The solution</h2>
+  <p>One implementation, two front ends. The CLI and the web UI take the same snapshot of the system, enable the same actions, and call the same <code>mounter</code> and <code>unmounter</code> code &mdash; so there is no second implementation to drift.</p>
+
+  <dl class="commands">
+    <dt>mount</dt>
+    <dd>Evicts Apple&rsquo;s read-only mount, starts ntfs-3g on FUSE-T, and proves the result writable before reporting success.</dd>
+    <dt>unmount</dt>
+    <dd>Tears down the FUSE-T mount, then restores Apple&rsquo;s read-only mount &mdash; the state you started in. <code>--keep-unmounted</code> stops after the unmount.</dd>
+    <dt>eject</dt>
+    <dd>Unmounts and ejects the parent disk, refusing while a mount it cannot account for is still live.</dd>
+    <dt>doctor</dt>
+    <dd>Checks FUSE-T, the ntfs-3g linkage, root, and whether the first NTFS device can be opened, with a fix for each failure.</dd>
+    <dt>status</dt>
+    <dd>Reports one volume&rsquo;s state, driver, and serving process, as text or JSON. <code>list</code> does the same for every attached NTFS volume.</dd>
+  </dl>
+
+  <p>The optional web UI &mdash; the <code>web</code> subcommand, started as root &mdash; shows the same volumes and performs the same mount, unmount, and eject actions. It binds <code>127.0.0.1</code> only, prints its URL with a one-time token, and holds itself to the same safety rules as the CLI.</p>
+</section>
+
+<section id="design">
+  <h2>Design</h2>
+  <p>The interesting part of a tool like this is what it refuses to do. These are the invariants the code enforces; they are written down in <code>AGENTS.md</code> and are not negotiable in a change.</p>
+
+  <ul class="invariants">
+    <li><strong>One escalation path.</strong> Every mutating command re-execs the CLI through <code>sudo</code> in <code>privileged.py</code>. There is no <code>osascript</code>, no GUI password prompt, and no other route to root.</li>
+    <li><strong>A failed mount puts Apple&rsquo;s read-only mount back.</strong> The mounter evicts that mount to make room, so every failure path restores it, and the tool claims &ldquo;restored&rdquo; only when a fresh mount-table read confirms it.</li>
+    <li><strong>The FSKit mount point is recreated.</strong> Unmounting Apple&rsquo;s FSKit volume also deletes <code>/Volumes/&lt;label&gt;</code>. The mounter recreates the directory before ntfs-3g starts, because FUSE-T&rsquo;s helper fails with exit 66 when the mount point vanishes underneath it.</li>
+    <li><strong>One signal, once.</strong> The only signal the unmounter ever sends is <code>SIGTERM</code>, once, to the serving ntfs-3g after a normal unmount fails as busy. It retries the unmount and then reports; it never sends <code>SIGKILL</code>.</li>
+    <li><strong>The web UI is loopback-only, and guarded.</strong> It listens on <code>127.0.0.1</code>; the launch token is compared in constant time and exchanged once for an <code>HttpOnly</code>, <code>SameSite=Strict</code> cookie. Every mutation needs the <code>X-NTFSMNT: 1</code> header and an allowed <code>Origin</code>; a <code>Host</code> outside the allow-list gets 421; and a single non-blocking operation lock answers a second request with 409.</li>
+    <li><strong>No write without a probe.</strong> A mount is proven by writing <code>.ntfsmnt-probe</code>, reading it back, and deleting it &mdash; then checking the mount point is owned by the invoking user, not root, before success is reported.</li>
+    <li><strong>Hibernated and dirty volumes are refused by default.</strong> <code>--recover</code> replays the NTFS journal and <code>--remove-hiberfile</code> discards a hibernated Windows session; both are opt-in, and the second requires typing the volume label first.</li>
+    <li><strong>No guesses on duplicate labels.</strong> If two volumes share a label, the command fails and lists the candidates instead of picking one.</li>
+    <li><strong>No repair tools, ever.</strong> The code never calls <code>ntfsfix</code>, <code>ntfsresize</code>, <code>mkntfs</code>, or <code>ntfswipe</code> &mdash; not as a fallback, not as a convenience.</li>
+  </ul>
+</section>
+
+<section id="run">
+  <h2>How to run</h2>
+  <p>Two native pieces are required on every Mac: the FUSE-T cask, and an ntfs-3g built against it rather than against macFUSE. The setup script installs both; start with the read-only check, which changes nothing and exits cleanly on a machine that is missing everything.</p>
+
+  <pre><code>./scripts/setup.sh --check</code></pre>
+
+  <p>Then install the tool by any of the three routes above and ask it what the host is missing:</p>
+
+  <pre><code>ntfsmnt doctor</code></pre>
+
+  <p><code>mount</code>, <code>unmount</code>, and <code>eject</code> re-exec through <code>sudo</code>, which is why the terminal you run them from needs Full Disk Access &mdash; the grant is attributed to the terminal, not to the binary. Run <code>doctor</code> unprivileged to inspect the environment; its <code>root</code> and <code>device-access</code> checks fail by design there, and pass under <code>sudo</code> from the same terminal.</p>
+
+  <p>For the browser UI, from a checkout:</p>
+
+  <pre><code>sudo uv run ntfsmnt web</code></pre>
+
+  <p>It prints <code>http://127.0.0.1:&lt;port&gt;/?token=&lt;random&gt;</code> and serves nothing outside loopback. The installed command is the same <code>web</code> subcommand, run as root.</p>
+
+  <p class="future"><strong>Future work.</strong> A signed, notarized companion app (which needs an Apple Developer ID) is not built. Nothing on this page depends on it.</p>
+</section>
+
+<section id="audience">
+  <h2>Audience</h2>
+  <ul class="audience">
+    <li><strong>The maintainer&rsquo;s other Macs.</strong> One documented sequence, no memory required: clone, run the setup script, mount.</li>
+    <li><strong>Technical Mac users.</strong> <code>uv tool install</code>, <code>pipx</code>, or Homebrew, plus a setup script that builds the one dependency macOS does not ship.</li>
+    <li><strong>The open-source community.</strong> An MIT-licensed PyPI release with tests, issue tracking, and design specs and plans kept in the repository.</li>
+    <li><strong>Not yet: the double-click experience.</strong> A menu-bar companion app exists in the repo as an unsigned, build-from-source launcher (<code>bash scripts/build-app.sh</code>); notarization is a walk-through in <code>docs/APP.md</code> that needs an Apple Developer ID. The install is still a terminal command.</li>
+  </ul>
+</section>
+
+<section id="contribute">
+  <h2>Contribute</h2>
+  <p>Development uses <a href="https://docs.astral.sh/uv/">uv</a>. The web extra brings in FastAPI, uvicorn, and Jinja2 for the browser UI and its tests; without it those tests skip while the service, model, and config tests still run.</p>
+
+  <pre><code>uv sync --extra web
+uv run pytest -q</code></pre>
+
+  <p>That is 295 tests. The important ones use the injected-runner pattern: every subprocess effect goes through an injected callable (<code>run</code>, <code>read_mount_table</code>, <code>sleep</code>, the write probe), so the full mount and unmount sequences run without touching <code>/Volumes</code>.</p>
+
+  <p>The safety invariants and the web-layer invariants live in <a href="https://github.com/AkshayHarti/ntfs-mounter/blob/main/AGENTS.md">AGENTS.md</a>. A good change adds tests in that injected-runner style and keeps the <a href="https://github.com/AkshayHarti/ntfs-mounter/blob/main/README.md">README</a> and AGENTS.md honest about what is verified and what is not.</p>
+
+  <p>Bugs and proposals go to <a href="https://github.com/AkshayHarti/ntfs-mounter/issues">GitHub Issues</a>; the specs and plans behind each feature are in <a href="https://github.com/AkshayHarti/ntfs-mounter/tree/main/docs">docs/</a>.</p>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <p class="footer-line">
+    <a href="https://github.com/AkshayHarti/ntfs-mounter/blob/main/LICENSE">MIT licence</a>
+    <span aria-hidden="true">/</span>
+    <a href="https://pypi.org/project/ntfsmnt/">PyPI</a>
+    <span aria-hidden="true">/</span>
+    <a href="https://github.com/AkshayHarti/ntfs-mounter">GitHub</a>
+  </p>
+  <p class="footer-line muted">ntfsmnt 0.1.0 &middot; updated <time datetime="2026-10-23">2026-10-23</time> &middot; <a href="https://akshayharti.github.io/ntfs-mounter/">akshayharti.github.io/ntfs-mounter</a></p>
+</footer>
+
+</body>
+</html>

@@ -2,6 +2,7 @@ import re
 
 import pytest
 
+from ntfsmnt import paths
 from ntfsmnt.models import Device
 from ntfsmnt.mounttable import MountEntry
 from ntfsmnt.unmounter import (
@@ -44,7 +45,7 @@ HD2 = Device(
     mount_point=None,
 )
 HD2_MOUNT_POINT = "/Volumes/HD2"
-NTFS3G = "/usr/local/bin/ntfs-3g"
+NTFS3G = paths.NTFS3G
 
 OURS = MountEntry(
     source="fuse-t:/HD1", mount_point=MOUNT_POINT, fs="nfs", read_only=False

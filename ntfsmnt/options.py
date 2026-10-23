@@ -1,4 +1,6 @@
-NTFS3G_BIN = "/usr/local/bin/ntfs-3g"
+from ntfsmnt import paths
+
+NTFS3G_BIN = paths.NTFS3G
 
 
 class ConfirmationRequired(Exception):

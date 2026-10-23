@@ -1,9 +1,10 @@
+from ntfsmnt import paths
 from ntfsmnt.options import build_mount_args, classify_mount_failure
 
 
 def test_defaults_exclude_destructive_flags():
     args = build_mount_args("/dev/disk4s1", "/Volumes/HD1", uid=501, gid=20, label="HD1")
-    assert args[0] == "/usr/local/bin/ntfs-3g"
+    assert args[0] == paths.NTFS3G
     assert args[1:3] == ["/dev/disk4s1", "/Volumes/HD1"]
     assert args[3] == "-o"
     opts = next(a for a in args if a.startswith("uid="))
