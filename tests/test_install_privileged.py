@@ -247,3 +247,10 @@ def test_local_build_installs_the_checkout_not_a_same_numbered_release() -> None
     guard = _code()
     assert "--local and --version" in guard or "--local takes the version" in guard
     assert "--local            build the checkout" in TEXT  # documented in --help
+
+def test_local_sdist_installs_the_web_extra() -> None:
+    # A bare path has no extras; without this the "upgraded" CLI was genuine
+    # code that could not even start `web`.
+    body = _function("resolve_spec")
+    assert "die \"--sdist path not found" in body
+    assert "printf '%s[web]' \"$SDIST\"" in body

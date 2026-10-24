@@ -133,7 +133,9 @@ resolve_spec() {
   local version
   if [[ -n $SDIST ]]; then
     [[ -e $SDIST ]] || die "--sdist path not found: $SDIST"
-    printf '%s' "$SDIST"
+    # A bare path silently drops the extra, so a --local/--sdist install was
+    # genuine code with no web UI; append it the same way.
+    printf '%s[web]' "$SDIST"
     return 0
   fi
   version=$VERSION
