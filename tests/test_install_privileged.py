@@ -238,3 +238,12 @@ def test_check_mode_exits_zero_unprivileged() -> None:
     assert any(marker in result.stdout for marker in ("ok:", "FAIL:", "info:"))
     # install steps print "==>"; --check must not.
     assert "==>" not in result.stdout
+
+def test_local_build_installs_the_checkout_not_a_same_numbered_release() -> None:
+    body = _function("install_cli")
+    assert "--local needs" in body or "needs uv" in body
+    assert body.index("Build the local checkout") < body.index("resolve_spec")
+    assert "uv\" build --out-dir" in body
+    guard = _code()
+    assert "--local and --version" in guard or "--local takes the version" in guard
+    assert "--local            build the checkout" in TEXT  # documented in --help
