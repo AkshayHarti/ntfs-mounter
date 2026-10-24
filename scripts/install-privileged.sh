@@ -3,6 +3,7 @@
 # menu-bar app start `ntfsmnt web` without a password.
 #
 #   sudo scripts/install-privileged.sh [--version <x.y.z>] [--sdist <path>]
+#                                       [--local]
 #   scripts/install-privileged.sh --check      # read-only, no root, exits 0 anywhere
 #                                               # (it does run `sudo -n -l`, never a mutation)
 #   sudo scripts/install-privileged.sh --uninstall
@@ -36,6 +37,7 @@ OK=0
 FAILED=0
 INFO=0
 TMP_SUDOERS=''
+LOCAL_OUT=''
 ORIGINAL_ARGS_STR=''
 
 say() { printf '%s\n' "$*"; }
@@ -50,18 +52,24 @@ cleanup() {
   if [[ -n $TMP_SUDOERS ]]; then
     rm -f "$TMP_SUDOERS"
   fi
+  if [[ -n $LOCAL_OUT ]]; then
+    rm -rf "$LOCAL_OUT"
+  fi
 }
 trap cleanup EXIT
 
 usage() {
   cat <<'EOF'
 usage: sudo scripts/install-privileged.sh [--version <x.y.z>] [--sdist <path>]
+                                          [--local]
        scripts/install-privileged.sh --check
        sudo scripts/install-privileged.sh --uninstall
 
   --version <x.y.z>  install this release from PyPI
                      (default: __version__ in ntfsmnt/__init__.py)
   --sdist <path>     install this local wheel/sdist instead of PyPI (testing)
+  --local            build the checkout at hand (`uv build`) and install that
+                     sdist instead of PyPI (testing)
   --check            report the installed state; read-only, exits 0 anywhere
   --uninstall        remove the sudoers rule, then the root-owned CLI
   -h, --help         show this help
@@ -214,11 +222,28 @@ install_cli() {
   if ! have visudo; then
     die "visudo is required to validate the sudoers rule (part of sudo) and was not found; nothing was changed"
   fi
-  spec=$(resolve_spec) || exit 1
 
   step "Create $(dirname "$VENV_DIR")"
   mkdir -p "$(dirname "$VENV_DIR")"
   require_trusted_ancestors
+
+  if [[ $LOCAL == 1 ]]; then
+    # Install what this checkout actually is, not a same-numbered release from
+    # PyPI: without this, a merged-but-unreleased feature is silently absent.
+    if ! uv=$(find_uv); then
+      die '--local builds the checkout, so it needs uv (brew install uv) — or build the sdist yourself and pass --sdist <path>'
+    fi
+    step "Build the local checkout"
+    LOCAL_OUT=$(mktemp -d "${TMPDIR:-/tmp}/ntfsmnt-local.XXXXXX") || die "mktemp failed"
+    (cd "$REPO_ROOT" && "$uv" build --out-dir "$LOCAL_OUT") || \
+      die "uv build failed; nothing was installed"
+    SDIST=$(printf '%s\n' "$LOCAL_OUT"/ntfsmnt-*.tar.gz | head -n 1)
+    [[ -f $SDIST ]] || die "uv build produced no sdist in $LOCAL_OUT"
+    ok "built $(basename "$SDIST")"
+  fi
+
+  spec=$(resolve_spec) || exit 1
+
 
   # Build beside the target and swap it in, so a failed install never leaves a
   # half-populated venv that the NOPASSWD rule would still point at.
@@ -374,6 +399,7 @@ run_check() {
 MODE=install
 VERSION=''
 SDIST=''
+LOCAL=0
 for arg in "$@"; do
   ORIGINAL_ARGS_STR+=" $(printf '%q' "$arg")"
 done
@@ -381,6 +407,8 @@ done
 while (($#)); do
   case $1 in
     --check) MODE=check ;;
+    --uninstall) MODE=uninstall ;;
+    --local) LOCAL=1 ;;
     --uninstall) MODE=uninstall ;;
     --version)
       (($# >= 2)) || { usage >&2; exit 2; }
@@ -404,6 +432,10 @@ while (($#)); do
   esac
   shift
 done
+
+if [[ $LOCAL == 1 && -n $VERSION ]]; then
+  die "--local takes the version from the checkout; drop --version $VERSION"
+fi
 
 if [[ $MODE == check ]]; then
   run_check

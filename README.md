@@ -464,6 +464,14 @@ What setup installs:
 %admin ALL=(root) NOPASSWD: /usr/local/libexec/ntfsmnt/bin/ntfsmnt web *
 ```
 
+By default the installer installs the **released** `ntfsmnt[web]==<version>`
+from PyPI, not your checkout — features merged since the last release are
+simply absent until the next one. To install the checkout at hand:
+
+```bash
+sudo ./scripts/install-privileged.sh --local   # uv build, then install that sdist
+```
+
 The grant covers **only the `web` subcommand of a root-owned binary**. It is a
 deliberate, opt-in tradeoff: any admin user on the Mac can start a root web
 server bound to loopback without a password. The web layer's token→cookie

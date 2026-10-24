@@ -21,7 +21,8 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 - Release: see `docs/RELEASING.md`; version lives only in `ntfsmnt/__init__.py`
 - App build: `bash scripts/build-app.sh` (unsigned bundle in `dist/`)
 - App install: `bash scripts/install-app.sh [--user] [--launch]`
-- Privileged setup: `sudo ./scripts/install-privileged.sh` (`--check` read-only,
+- Privileged setup: `sudo ./scripts/install-privileged.sh` (`--local` installs the
+  checkout instead of the PyPI release; `--check` read-only,
   exits 0 anywhere; `--uninstall` removes the rule before the venv)
 - npm tests: `cd npm && npm test` (also run by CI)
 - Site preview: `python3 -m http.server -d site` then http://localhost:8000
