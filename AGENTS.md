@@ -243,9 +243,14 @@ CLI rules above. Do not weaken these either.
    root.
 7. **Read-only without root.** Without root (or without owner ids) every
    mutation is refused with a structured 403; state remains readable and the
-   page says why. Nothing re-execs `sudo` on the user's behalf — with one
-   sanctioned exception: the menu-bar app may start `web` through the narrow
-   `NOPASSWD` rule described under "Privileged install invariants".
+   page says why. Nothing re-execs `sudo` on the user's behalf — with two
+   sanctioned exceptions, both through the narrow `NOPASSWD` rule described
+   under "Privileged install invariants": the menu-bar app and `ntfsmnt mcp`
+   may start `web`.
+8. **An agent token is not a session.** A bearer agent token reaches the grant
+   routes and action routes only; it cannot open the dashboard, approve a
+   request, or mint a grant. Approval requires the single-use nonce from the
+   page, never the agent token.
 
 ## Privileged install invariants
 
@@ -263,8 +268,8 @@ a prompt. Do not weaken these.
 4. **Uninstall removes the rule first**, then the venv, so there is no window
    where the grant outlives the code.
 5. **No always-on service.** No LaunchDaemon, no login item; the server is a
-   child of the app and dies with it. The token travels only over the stdout
-   pipe, never a file.
+   child of the menu-bar app or of one MCP client session and dies with it. The
+   token travels only over the stdout pipe, never a file.
 6. **The app's `SIGKILL` is for its own server child only**, after `SIGTERM`
    and a 5 s wait. It must never target a mount, `ntfs-3g`, or any disk-related
    process; invariant 3 above still forbids `kill -9` there.
