@@ -37,6 +37,7 @@ def _error(status: int, code: str, message: str, next_step: str | None = None):
 from ntfsmnt.web.auth import require_session  # noqa: F401  (re-exported)
 from ntfsmnt.web.auth import require_mutation  # noqa: F401  (re-exported)
 from ntfsmnt.web.agent import register_agent_routes
+from ntfsmnt.web.grants import register_grant_routes
 
 
 _FORM_TRUE = {"on", "true", "1", "yes"}
@@ -330,6 +331,7 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
         return _error(exc.status_code, code, str(exc.detail))
 
     register_agent_routes(app, settings, svc, templates)
+    register_grant_routes(app, settings, svc, templates)
 
     app.mount("/static", StaticFiles(directory=PAGE_DIR), name="static")
     return app

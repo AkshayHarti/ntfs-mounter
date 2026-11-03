@@ -9,13 +9,14 @@ from itertools import count
 from threading import Lock
 
 from ntfsmnt.cli import real_run
+from ntfsmnt.control.grants import GrantStore
 from ntfsmnt.diskutil import read_all_infos
 from ntfsmnt.doctor import HARD_CHECK_NAMES, Check, Env, run_checks
 from ntfsmnt.identity import parse_pid, pid_pattern
 from ntfsmnt.mounter import MountFailed, MountResult, mount_volume
 from ntfsmnt.mounttable import MountEntry, read_mount_table
 from ntfsmnt.unmounter import UnmountFailed, eject_volume, unmount_volume
-from ntfsmnt.volumes import Volume, build_volumes
+from ntfsmnt.volumes import AmbiguousVolume, NoSuchVolume, Volume, build_volumes, resolve
 from ntfsmnt.web.config import Settings
 from ntfsmnt.web.events import ActivityLog, EventBus
 from ntfsmnt.web.models import (
@@ -62,6 +63,7 @@ class Service:
         activity: ActivityLog | None = None,
         doctor_env: Env | None = None,
         clock: Callable[[], datetime] = utcnow,
+        grants: GrantStore | None = None,
     ) -> None:
         self.settings = settings
         self._discover = discover
@@ -70,6 +72,7 @@ class Service:
         self._sleep = sleep
         self.events = events or EventBus()
         self.activity_log = activity or ActivityLog()
+        self.grants = grants or GrantStore(clock=clock)
         self._doctor = DoctorStatus(status="ok", checked_at="", findings=())
         self._doctor_env = doctor_env
         self._clock = clock
@@ -121,6 +124,22 @@ class Service:
             operation=self._operation,
             volumes=views,
         )
+
+    def grant_lookup(self, selector: str) -> Volume:
+        """Resolve a grant target without guessing: ambiguity is its own error."""
+        volumes = self._discover()
+        try:
+            return resolve(selector, volumes)
+        except AmbiguousVolume:
+            raise _Fail(ActionError(
+                "ambiguous_volume",
+                f"more than one volume matches {selector!r}; use the device name",
+                404,
+            )) from None
+        except NoSuchVolume:
+            raise _Fail(ActionError(
+                "volume_not_found", f"no volume matches {selector!r}", 404
+            )) from None
 
     def _host(self) -> HostView:
         failed = {f.check for f in self._doctor.findings}
