@@ -45,15 +45,48 @@ render disabled, and availability comes from the live state, not the model.
 
 ## MCP (`ntfsmnt mcp`)
 
-A read-only MCP server on stdio (JSON-RPC 2.0, protocol 2024-11-05):
+An MCP server on stdio (JSON-RPC 2.0, protocol 2024-11-05). The read tools
+work anywhere; the action tools need a one-time privileged install.
 
 ```bash
-uv run ntfsmnt mcp < tools.jsonl   # one JSON-RPC request per line
+sudo ./scripts/install-privileged.sh      # once: root CLI + narrow NOPASSWD rule
+uvx ntfsmnt mcp                           # the client runs this as its command
+uv run ntfsmnt mcp < tools.jsonl          # from a checkout
 ```
 
-Tools: `list_volumes`, `get_status`, `run_doctor`. There is deliberately no
-mount tool — that needs root and a person. Point an AI client at the command
-above; answers are the CLI's `--json` shapes.
+All nine tools:
+
+| Tool | Grant | What it does |
+|---|---|---|
+| `list_volumes` | no | the CLI's `--json list` snapshot |
+| `get_status` | no | one volume plus the mounts that serve it |
+| `run_doctor` | no | the environment checks |
+| `request_grant` | no | ask a human; returns when approved, denied, or timed out |
+| `mount_volume` | yes | mount the volume the grant names |
+| `unmount_volume` | yes | unmount it |
+| `eject_volume` | yes | eject it |
+| `list_grants` | no | grants that are still alive |
+| `revoke_grant` | no | spend one early |
+
+A grant is narrow and expires: it names one volume and a subset of `mount`,
+`unmount`, `eject`, for at most 30 minutes. `request_grant` opens the approval
+page in the browser; the page's link carries a single-use nonce, and the
+agent token cannot approve its own request. `--approve touchid` prefers the
+app's Touch ID helper and falls back to the browser. `--no-browser` prints the
+URL to stderr instead. `recover` and `remove_hiberfile` are never grantable —
+a person runs those from the CLI.
+
+The adapter holds only an agent token handed over a pipe. The human token
+never leaves the root controller, which is started per session with `sudo -n
+... web --mcp-session` and exits on stdin EOF or `SIGTERM`.
+
+### Demo image
+
+`ntfsmnt demo` downloads a small NTFS image once into
+`~/Library/Caches/ntfsmnt/`, verifies its pinned SHA-256, and attaches it
+read-only. `ntfsmnt mcp --demo` does the same before serving, so an agent can
+exercise a mount without real hardware. An unpublished or mismatched image is
+refused, never attached unverified.
 
 ## For AI agents working on this repo
 

@@ -1,10 +1,10 @@
 # ntfsmnt as an agent — MCP action server (Option A) — design spec
 
 **Date:** 2026-11-03
-**Status:** draft for review — Option A approved as the starting shape
+**Status:** approved — Option A
 **Options board:** `docs/agent-options.html` (A/B/C comparison, trade-offs, wedge path)
 **Rendered:** `docs/mcp-action-server.html` (generated from this file)
-**Plan:** to follow (`docs/plans/`)
+**Plan:** `docs/plans/2026-11-03-mcp-action-server.md`
 
 ## Problem
 

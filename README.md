@@ -429,9 +429,24 @@ over SSE as **AG-UI** events.
 - Destructive options (`--recover`, `--remove-hiberfile`) stay on the classic
   dashboard.
 
-`ntfsmnt mcp` runs a **read-only** MCP server on stdio (`list_volumes`,
-`get_status`, `run_doctor`) so AI clients can inspect volumes without any way
-to change them. See `docs/AGENT.md`.
+`ntfsmnt mcp` is an MCP server on stdio. Three read tools (`list_volumes`,
+`get_status`, `run_doctor`) need no privilege. Six more — `request_grant`,
+`mount_volume`, `unmount_volume`, `eject_volume`, `list_grants`,
+`revoke_grant` — let an agent finish the job inside a **narrow, expiring
+grant** that a human approves in the browser. `recover` and
+`remove-hiberfile` are never grantable.
+
+```bash
+sudo ./scripts/install-privileged.sh   # once: root CLI + narrow NOPASSWD rule
+uvx ntfsmnt mcp                        # what the AI client runs
+uvx ntfsmnt mcp --approve touchid      # optional Touch ID helper (app build)
+uvx ntfsmnt mcp --demo                 # attach the disposable demo image first
+```
+
+The adapter gets only an agent token; the human token stays in the root
+controller. `ntfsmnt demo` downloads a small image once into
+`~/Library/Caches/ntfsmnt/`, verifies its pinned hash, and attaches it
+read-only. See `docs/AGENT.md` and `server.json`.
 
 ## Menu-bar app
 
@@ -755,7 +770,7 @@ uv run pytest -q
 
 Without `--extra web` the FastAPI/Jinja API, page, and schema tests skip; the
 service, models, and config tests still run.
-The suite has 395 tests and never touches hardware. Subprocess effects
+The suite has 523 tests and never touches hardware. Subprocess effects
 (`diskutil`, `ntfs-3g`, `mount`, `pgrep`, `kill`, `sleep`) are injected as
 callables, and the mount-point creation, write probe, and ownership `stat` are
 monkeypatched in tests that exercise the orchestration.
