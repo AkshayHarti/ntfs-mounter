@@ -613,17 +613,24 @@ class="sourceCode json"><code class="sourceCode json"><span id="cb3-1"><a href="
 <p>Events: <code>mcp.session.start</code>, <code>grant.requested</code>,
 <code>grant.approved</code>, <code>grant.denied</code>,
 <code>grant.expired</code>, <code>grant.revoked</code>,
-<code>action.refused</code> (with code), <code>mount.ok</code>,
-<code>mount.fail</code>, <code>unmount.ok</code>,
-<code>unmount.fail</code>, <code>eject.ok</code>,
-<code>eject.fail</code>. No file contents, no volume paths beyond the
-mount point.</p>
+<code>action.refused</code> (with code), <code>mount.attempt</code>,
+<code>mount.ok</code>, <code>mount.fail</code>,
+<code>unmount.attempt</code>, <code>unmount.ok</code>,
+<code>unmount.fail</code>, <code>eject.attempt</code>,
+<code>eject.ok</code>, <code>eject.fail</code>. No file contents, no
+volume paths beyond the mount point.</p>
 <p><strong>Audit failure is a safety decision, not an
-afterthought.</strong> If the append fails, <code>mount</code> and
-<code>eject</code> fail closed (<code>audit_unavailable</code>);
-<code>unmount</code> proceeds and writes the failure to stderr, because
-leaving a volume mounted is worse than a missing line.
-<code>ntfsmnt audit --json</code> is a follow-up, not this spec.</p>
+afterthought.</strong> Every action writes an
+<code>&lt;action&gt;.attempt</code> line <em>before</em> touching the
+host, so a mutation can never start unlogged. If that line cannot be
+written, <code>mount</code> and <code>eject</code> fail closed
+(<code>audit_unavailable</code>); <code>unmount</code> proceeds and
+reports the failure on stderr, because leaving a volume mounted is worse
+than a missing line. The outcome line
+(<code>ok</code>/<code>fail</code>) is written after the runner; if
+<em>it</em> fails, the real result is still returned and the failure is
+logged, never hidden. <code>ntfsmnt audit --json</code> is a follow-up,
+not this spec.</p>
 <h2 id="distribution">Distribution</h2>
 <ul>
 <li><strong>PyPI</strong>: <code>uvx ntfsmnt mcp</code> runs the
@@ -868,8 +875,8 @@ SIGKILL</td>
 </tr>
 <tr>
 <td>Audit write fails mid-action</td>
-<td><code>mount</code>/<code>eject</code> refuse; <code>unmount</code>
-proceeds and logs to stderr</td>
+<td>Pre-action line fails → <code>mount</code>/<code>eject</code>
+refuse; outcome line fails → result returned and logged to stderr</td>
 </tr>
 <tr>
 <td>FUSE-T licence blocks paid distribution</td>

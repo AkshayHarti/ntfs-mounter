@@ -291,13 +291,18 @@ event:
 
 Events: `mcp.session.start`, `grant.requested`, `grant.approved`,
 `grant.denied`, `grant.expired`, `grant.revoked`, `action.refused` (with code),
-`mount.ok`, `mount.fail`, `unmount.ok`, `unmount.fail`, `eject.ok`, `eject.fail`.
-No file contents, no volume paths beyond the mount point.
+`mount.attempt`, `mount.ok`, `mount.fail`, `unmount.attempt`, `unmount.ok`,
+`unmount.fail`, `eject.attempt`, `eject.ok`, `eject.fail`. No file contents, no
+volume paths beyond the mount point.
 
-**Audit failure is a safety decision, not an afterthought.** If the append fails,
-`mount` and `eject` fail closed (`audit_unavailable`); `unmount` proceeds and
-writes the failure to stderr, because leaving a volume mounted is worse than a
-missing line. `ntfsmnt audit --json` is a follow-up, not this spec.
+**Audit failure is a safety decision, not an afterthought.** Every action writes
+an `<action>.attempt` line *before* touching the host, so a mutation can never
+start unlogged. If that line cannot be written, `mount` and `eject` fail closed
+(`audit_unavailable`); `unmount` proceeds and reports the failure on stderr,
+because leaving a volume mounted is worse than a missing line. The outcome line
+(`ok`/`fail`) is written after the runner; if *it* fails, the real result is
+still returned and the failure is logged, never hidden. `ntfsmnt audit --json`
+is a follow-up, not this spec.
 
 ## Distribution
 
@@ -416,7 +421,7 @@ dishonesty `AGENTS.md` forbids.
 | Approval spam from a looping model | 3 pending requests max, deduplicated by volume+actions |
 | Touch ID missing, unenrolled, or denied | Fall back to the browser page; never auto-approve |
 | Demo download blocked or hash mismatch | Refuse; no mirror fallback, no unverified image |
-| Audit write fails mid-action | `mount`/`eject` refuse; `unmount` proceeds and logs to stderr |
+| Audit write fails mid-action | Pre-action line fails → `mount`/`eject` refuse; outcome line fails → result returned and logged to stderr |
 | FUSE-T licence blocks paid distribution | Backend seam; native formats avoid FUSE-T |
 | Name no longer fits exFAT | Decide at F1; keep `ntfsmnt` until then |
 
