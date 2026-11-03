@@ -3,6 +3,7 @@
 **Date:** 2026-11-03
 **Status:** draft for review — Option A approved as the starting shape
 **Options board:** `docs/agent-options.html` (A/B/C comparison, trade-offs, wedge path)
+**Rendered:** `docs/mcp-action-server.html` (generated from this file)
 **Plan:** to follow (`docs/plans/`)
 
 ## Problem

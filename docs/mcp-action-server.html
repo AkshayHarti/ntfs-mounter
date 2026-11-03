@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>MCP action server — ntfsmnt spec</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfaf7;
+    --bg-2: #f2efe9;
+    --fg: #1c1b19;
+    --muted: #605e57;
+    --soft: #767065;
+    --rule: #e2ded6;
+    --rule-strong: #c9c3b8;
+    --code-bg: #f2efe9;
+    --accent: #a4471b;
+    --accent-2: rgba(164, 71, 27, 0.08);
+    --measure: 46rem;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131312; --bg-2: #1c1b19; --fg: #e9e6df; --muted: #a3a099;
+      --soft: #8a857c; --rule: #2b2a27; --rule-strong: #3d3a35;
+      --code-bg: #201f1d; --accent: #e3a373; --accent-2: rgba(227, 163, 115, 0.10);
+    }
+  }
+
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--sans); font-size: 1rem; line-height: 1.65;
+    font-kerning: normal; -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    display: grid; grid-template-columns: 15rem minmax(0, var(--measure));
+    gap: 3.5rem; justify-content: center;
+    max-width: 76rem; margin: 0 auto; padding: 3.5rem 1.5rem 5rem;
+  }
+
+  /* ── sidebar ─────────────────────────────────────────────────── */
+  .side { position: sticky; top: 2rem; align-self: start; max-height: calc(100vh - 4rem); overflow-y: auto; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--soft);
+  }
+  .side h1 {
+    margin: 0.55rem 0 0; font-size: 1.3rem; font-weight: 600;
+    letter-spacing: -0.02em; line-height: 1.25;
+  }
+  .side .meta {
+    margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--rule);
+    font-family: var(--mono); font-size: 0.66rem; line-height: 1.9; color: var(--muted);
+  }
+  .side .meta b { color: var(--fg); font-weight: 500; }
+  .side .links { margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--rule); }
+  .side .links a {
+    display: block; padding: 0.28rem 0; color: var(--muted);
+    font-size: 0.82rem; text-decoration: none;
+  }
+  .side .links a:hover { color: var(--accent); }
+
+  nav.toc { margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px solid var(--rule); }
+  nav.toc ul { list-style: none; margin: 0; padding: 0; }
+  nav.toc > ul > li { padding: 0.18rem 0; }
+  nav.toc a {
+    color: var(--muted); text-decoration: none; font-size: 0.8rem;
+    display: block; line-height: 1.4;
+  }
+  nav.toc a:hover { color: var(--accent); }
+  nav.toc ul ul { margin-left: 0.7rem; }
+  nav.toc ul ul a { font-size: 0.74rem; color: var(--soft); }
+
+  /* ── article ─────────────────────────────────────────────────── */
+  main { min-width: 0; }
+
+  h2 {
+    margin: 3rem 0 0.75rem; padding-top: 1.4rem; border-top: 1px solid var(--rule);
+    font-size: 1.45rem; font-weight: 600; letter-spacing: -0.015em; line-height: 1.25;
+  }
+  h2:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
+  h3 {
+    margin: 1.9rem 0 0.5rem; font-size: 1.08rem; font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  h4 { margin: 1.3rem 0 0.4rem; font-size: 0.95rem; font-weight: 600; }
+
+  p { margin: 0.75rem 0; }
+  strong { font-weight: 600; }
+  em { font-style: italic; }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  ul, ol { margin: 0.7rem 0; padding-left: 1.3rem; }
+  li { margin: 0.3rem 0; }
+  li > ul, li > ol { margin: 0.25rem 0; }
+
+  code {
+    font-family: var(--mono); font-size: 0.84em;
+    background: var(--code-bg); border: 1px solid var(--rule);
+    border-radius: 4px; padding: 0.08em 0.32em;
+  }
+  pre {
+    margin: 1rem 0; padding: 0.95rem 1.1rem; overflow-x: auto;
+    background: var(--code-bg); border: 1px solid var(--rule);
+    border-radius: 6px; line-height: 1.5;
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: 0.8rem; }
+
+  blockquote {
+    margin: 1rem 0; padding: 0.2rem 0 0.2rem 1.1rem;
+    border-left: 2px solid var(--accent); color: var(--muted);
+  }
+
+  .table-wrap { margin: 1.1rem 0; overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+  th {
+    text-align: left; font-family: var(--mono); font-size: 0.58rem;
+    letter-spacing: 0.11em; text-transform: uppercase; color: var(--soft);
+    background: var(--bg-2); border-bottom: 1px solid var(--rule-strong);
+    padding: 0.55rem 0.75rem; white-space: nowrap;
+  }
+  td { padding: 0.55rem 0.75rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td code { font-size: 0.78em; }
+
+  hr { border: 0; height: 1px; background: var(--rule); margin: 2rem 0; }
+
+  footer {
+    margin-top: 3.5rem; padding-top: 1.1rem; border-top: 1px solid var(--rule);
+    font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.04em;
+    color: var(--soft); line-height: 1.9;
+  }
+
+  @media (max-width: 860px) {
+    .shell { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; padding: 2rem 1.15rem 4rem; }
+    .side { position: static; max-height: none; overflow: visible; }
+    nav.toc { display: none; }
+    .side .links { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; }
+    .side .links a { display: inline; }
+  }
+
+  @media print {
+    .shell { display: block; max-width: none; padding: 0; }
+    .side { position: static; max-height: none; margin-bottom: 2rem; }
+    nav.toc { display: none; }
+    h2 { break-after: avoid; }
+    pre, table, blockquote { break-inside: avoid; }
+    a { color: inherit; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <aside class="side">
+    <div class="eyebrow">ntfsmnt · spec · 2026-11-03</div>
+    <h1>MCP action server — ntfsmnt spec</h1>
+    <div class="meta">
+      <div><b>Status</b> draft for review</div>
+      <div><b>Shape</b> A — toolbelt</div>
+      <div><b>Plan</b> to follow</div>
+    </div>
+    <div class="links">
+      <a href="agent-options.html">A/B/C options board</a>
+      <a href="overview.html">System overview</a>
+      <a href="AGENT.md">AGENT.md</a>
+    </div>
+    <nav class="toc" id="TOC">
+      <ul>
+      <li><a
+      href="#ntfsmnt-as-an-agent--mcp-action-server-option-a--design-spec"
+      id="toc-ntfsmnt-as-an-agent--mcp-action-server-option-a--design-spec">ntfsmnt
+      as an agent — MCP action server (Option A) — design spec</a>
+      <ul>
+      <li><a href="#problem" id="toc-problem">Problem</a></li>
+      <li><a href="#audience" id="toc-audience">Audience</a></li>
+      <li><a href="#goals" id="toc-goals">Goals</a></li>
+      <li><a href="#non-goals" id="toc-non-goals">Non-goals</a></li>
+      <li><a href="#shape-decision" id="toc-shape-decision">Shape
+      decision</a></li>
+      <li><a href="#architecture"
+      id="toc-architecture">Architecture</a></li>
+      <li><a href="#tool-contract" id="toc-tool-contract">Tool
+      contract</a></li>
+      <li><a href="#grant-model" id="toc-grant-model">Grant
+      model</a></li>
+      <li><a href="#privilege-and-auth-boundary"
+      id="toc-privilege-and-auth-boundary">Privilege and auth
+      boundary</a></li>
+      <li><a href="#audit" id="toc-audit">Audit</a></li>
+      <li><a href="#distribution"
+      id="toc-distribution">Distribution</a></li>
+      <li><a href="#format-expansion--options"
+      id="toc-format-expansion--options">Format expansion —
+      options</a></li>
+      <li><a href="#metrics" id="toc-metrics">Metrics</a></li>
+      <li><a href="#milestones" id="toc-milestones">Milestones</a></li>
+      <li><a href="#risks" id="toc-risks">Risks</a></li>
+      <li><a href="#open-questions" id="toc-open-questions">Open
+      questions</a></li>
+      </ul></li>
+      </ul>
+    </nav>
+  </aside>
+
+  <main>
+<h2 id="problem">Problem</h2>
+<p><code>ntfsmnt mcp</code> is deliberately read-only: it exposes
+<code>list_volumes</code>, <code>get_status</code>, and
+<code>run_doctor</code>, and the module docstring says mounting "needs
+root and a human who decides." That correctness is also the product
+limit. An agent can see a disk but cannot finish the job — mount it, let
+the user write, unmount it — so the user drops back to a terminal and
+the agent stops being useful at the exact moment it could be.</p>
+<p>The opportunity is not another mount command. It is a <strong>consent
+primitive</strong>: let an agent act on disks inside a narrow, expiring,
+human-approved grant, and let every action be auditable. Mounting is a
+commodity; a grant an agent can show is the new thing.</p>
+<h2 id="audience">Audience</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Audience</th>
+<th>What they need</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agent users (Claude Desktop, Cursor, Cline)</td>
+<td>One install, a tool that finishes the task without a terminal</td>
+</tr>
+<tr>
+<td>Developers / CI</td>
+<td>Scriptable, deterministic, no GUI-only steps</td>
+</tr>
+<tr>
+<td>Security-minded users</td>
+<td>No standing root, no wildcard rule, no repair tools, a visible audit
+trail</td>
+</tr>
+<tr>
+<td>Future format users (exFAT, APFS)</td>
+<td>The same verbs, honest about which backend served them</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="goals">Goals</h2>
+<ul>
+<li><strong>G1</strong> <code>ntfsmnt mcp</code> gains action tools:
+<code>mount_volume</code>, <code>unmount_volume</code>,
+<code>eject_volume</code>, plus <code>request_grant</code>,
+<code>list_grants</code>, <code>revoke_grant</code>.</li>
+<li><strong>G2</strong> No action runs without a grant bound to one
+volume, a set of actions, and a TTL. Grants are approved by a human in
+the browser; nothing is auto-approved.</li>
+<li><strong>G3</strong> The grant layer lives in <code>ntfsmnt/</code>,
+not in the MCP adapter, so Option B (daemon) is a packaging change: same
+interface, different host process.</li>
+<li><strong>G4</strong> Distribution is one line
+(<code>uvx ntfsmnt mcp</code>), with an MCP registry manifest and a
+zero-hardware demo image.</li>
+<li><strong>G5</strong> Every grant lifecycle event and every action is
+appended to a root-owned audit log; refusals are structured, not
+exceptions.</li>
+</ul>
+<h2 id="non-goals">Non-goals</h2>
+<ul>
+<li>No daemon, LaunchDaemon, or always-on service in this spec (that is
+Option B).</li>
+<li>No remote transport, multi-tenant auth, or fleet control plane.</li>
+<li>No non-NTFS backends yet; the backend interface is designed, not
+built.</li>
+<li>No destructive actions through MCP: <code>--recover</code> and
+<code>--remove-hiberfile</code> are never grantable and return a manual
+command instead.</li>
+<li>No <code>osascript</code>, no repair tools, no <code>SIGKILL</code>
+— unchanged.</li>
+</ul>
+<h2 id="shape-decision">Shape decision</h2>
+<p>Option A from <code>docs/agent-options.html</code>: a local stdio MCP
+server, one process per client session, no installed service. Internally
+it spawns a <strong>session controller</strong> — the existing root web
+server — via the rule the menu-bar app already uses. That gives A the
+safety properties of B without B's install friction.</p>
+<p>Rejected alternatives:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Alternative</th>
+<th>Why not</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Widen the sudoers rule to <code>mcp</code></td>
+<td>Adds a second root entry point; the rule stays <code>web</code>
+only</td>
+</tr>
+<tr>
+<td>Run the MCP server as root directly</td>
+<td>Every MCP client becomes root-capable; no approval boundary</td>
+</tr>
+<tr>
+<td>Touch ID per action</td>
+<td>Breaks the hero demo; still needs a controller for state</td>
+</tr>
+<tr>
+<td>A real daemon now</td>
+<td>Install friction kills the one-line demo; no demand proven</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="architecture">Architecture</h2>
+<pre><code>MCP client (Claude / Cursor / CI)
+   │  stdio, JSON-RPC 2.0
+   ▼
+ntfsmnt mcp  (user)                     ← thin adapter, no disk authority
+   │  spawn: sudo -n &lt;root venv&gt;/bin/ntfsmnt web --mcp-session
+   │         --port 0 --owner UID:GID --exit-on-stdin-eof
+   │  reads one JSON line from the child&#39;s stdout:
+   │         {&quot;ntfsmnt&quot;:&quot;mcp-session&quot;,&quot;port&quot;:N,&quot;agent_token&quot;:&quot;...&quot;}
+   ▼
+ntfsmnt web  (root, session-scoped)     ← controller: lock, grants, audit
+   │  existing mounter / unmounter / doctor
+   ▼
+already root → ntfs-3g → NTFS volume</code></pre>
+<ul>
+<li>The controller is the existing <code>web</code> server. It already
+owns the operation lock, the snapshot, the doctor refresh, and the
+SSE/activity bus; MCP mode simply does not expose the dashboard.</li>
+<li>The adapter is disposable: it maps MCP tools to HTTP calls. It holds
+an <strong>agent token</strong>, which can read state, request grants,
+and use them, but cannot mint, approve, or deny one.</li>
+<li><strong>No human token in MCP mode.</strong> The controller mints
+only an agent token; approval happens through a single-use nonce
+delivered to the human's browser. The normal menu-bar mode keeps today's
+single launch token unchanged.</li>
+<li><strong>stdout is the JSON-RPC channel.</strong> The adapter never
+prints anything to its own stdout except protocol messages; diagnostics
+and any <code>--no-browser</code> URL go to stderr.</li>
+</ul>
+<h3 id="trust-boundary">Trust boundary</h3>
+<p>The adapter is code we ship; the model is the untrusted party. The
+boundary is therefore a <strong>tool surface with no approve
+verb</strong> and a tool result that never contains an approval URL. A
+compromised adapter is equivalent to the user's own shell, which no
+in-process design can prevent — state that, do not pretend
+otherwise.</p>
+<h3 id="controller-lifetime">Controller lifetime</h3>
+<p><code>--exit-on-stdin-eof</code> makes the controller shut down when
+the adapter closes the child's stdin pipe. That covers the normal exit,
+an adapter crash, and a <code>SIGKILL</code> of the adapter; without it
+a root controller could outlive its client. This is a new, testable flag
+— the menu-bar app keeps its existing SIGTERM-then-wait behaviour.</p>
+<h3 id="why-not-attach-to-an-existing-dashboard">Why not attach to an
+existing dashboard</h3>
+<p>A second root server with in-memory grants is harmless if mutations
+take a <strong>cross-process file lock</strong>
+(<code>/var/run/ntfsmnt.lock</code>, root-owned, <code>flock</code>).
+The spec adds that lock; the in-process lock alone is not enough once
+two servers can exist. Lock contention returns
+<code>409 operation_in_progress</code> immediately — no waiting, no
+queue. The lock file's contents are irrelevant, so a stale file is
+harmless; the kernel releases <code>flock</code> on process death. A
+future <code>--attach</code> discovery mechanism is out of scope.</p>
+<h2 id="tool-contract">Tool contract</h2>
+<p>Read tools are unchanged and never need a grant.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Input</th>
+<th>Grant</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>list_volumes</code></td>
+<td>—</td>
+<td>no</td>
+<td>snapshot as today</td>
+</tr>
+<tr>
+<td><code>get_status</code></td>
+<td><code>volume</code></td>
+<td>no</td>
+<td>one volume + serving mount/pid</td>
+</tr>
+<tr>
+<td><code>run_doctor</code></td>
+<td>—</td>
+<td>no</td>
+<td>checks</td>
+</tr>
+<tr>
+<td><code>request_grant</code></td>
+<td><code>volume</code>, <code>actions[]</code>,
+<code>ttl_seconds</code>, <code>reason</code></td>
+<td>no</td>
+<td><code>{request_id, status}</code></td>
+</tr>
+<tr>
+<td><code>mount_volume</code></td>
+<td><code>volume</code>, <code>grant_id</code></td>
+<td>yes</td>
+<td>mount result + probe outcome</td>
+</tr>
+<tr>
+<td><code>unmount_volume</code></td>
+<td><code>volume</code>, <code>grant_id</code></td>
+<td>yes</td>
+<td>unmount result</td>
+</tr>
+<tr>
+<td><code>eject_volume</code></td>
+<td><code>volume</code>, <code>grant_id</code></td>
+<td>yes</td>
+<td>eject result</td>
+</tr>
+<tr>
+<td><code>list_grants</code></td>
+<td>—</td>
+<td>no</td>
+<td>active grants for this session</td>
+</tr>
+<tr>
+<td><code>revoke_grant</code></td>
+<td><code>grant_id</code></td>
+<td>no</td>
+<td>revoked / not found</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rules:</p>
+<ul>
+<li><code>actions</code> is a subset of
+<code>["mount", "unmount", "eject"]</code>. <code>recover</code> and
+<code>remove_hiberfile</code> are rejected at request time with
+<code>manual_required</code> and the exact CLI command. This is a hard,
+testable refusal.</li>
+<li><code>ttl_seconds</code> is 60–1800 (default 900). One grant covers
+one volume, resolved to UUID + device + label at approval time and
+re-checked at use time.</li>
+<li><strong>A <code>mount</code> grant implies
+<code>unmount</code></strong> for the same volume and TTL: refusing the
+cleanup step would leave a disk mounted, which is strictly worse. A bare
+<code>unmount</code>/<code>eject</code> still needs its own grant.</li>
+<li>Every action tool returns a structured result;
+missing/expired/mismatched grants return
+<code>{code: "grant_required", request_hint: ...}</code>, never a stack
+trace and never a silent retry.</li>
+<li>Volume selectors accept the same forms as the CLI (label, UUID,
+device, mount point). Ambiguity refuses; it never picks the first
+match.</li>
+<li>At most <strong>3 pending requests</strong> per controller,
+deduplicated by <code>(volume, actions)</code>. More returns
+<code>too_many_requests</code>; this bounds approval spam from a looping
+model.</li>
+</ul>
+<h3 id="approval-flow">Approval flow</h3>
+<ol type="1">
+<li>Agent calls <code>request_grant</code>; the result is
+<code>{request_id, status: "pending"}</code>.</li>
+<li>Adapter → controller <code>POST /api/v1/grants</code> with
+<code>Authorization: Bearer &lt;agent token&gt;</code>. The controller
+creates a pending request and returns
+<code>{request_id, approval_url, wait_seconds}</code>. The URL carries a
+<strong>single-use approval nonce</strong> — never a session token,
+never the agent token.</li>
+<li>Adapter calls <code>webbrowser.open(approval_url)</code> (it runs as
+the user) and returns only <code>{request_id, status}</code> to the
+model. The model never sees the URL or any credential.</li>
+<li>The page shows volume, actions, TTL, requesting client, and the
+agent's stated reason, with <strong>Approve</strong> /
+<strong>Deny</strong>. Destructive actions cannot appear.
+<code>POST /api/v1/grants/{request_id}/{approve|deny}</code> requires
+the nonce, <code>X-NTFSMNT: 1</code>, and an allowed
+<code>Origin</code>; <strong>agent tokens are rejected on this
+route</strong>, so no tool call can mint a grant. The page sets
+<code>Referrer-Policy: no-referrer</code> so the nonce cannot leak
+through a referrer.</li>
+<li>Adapter polls <code>GET /api/v1/grants/{request_id}</code> with the
+agent token (100 ms backoff, capped at the request's
+<code>wait_seconds</code>, default 90, max 300) and returns
+<code>approved</code> / <code>denied</code> / <code>timeout</code>.</li>
+</ol>
+<p>The browser click is the gate. Without it no grant exists, so no
+action can run. <code>--no-browser</code> writes the approval URL to
+<strong>stderr</strong> (stdout is the JSON-RPC channel) for a human to
+open manually; if nobody can, the request times out and actions fail
+closed with <code>approval_unavailable</code>.</p>
+<h2 id="grant-model">Grant model</h2>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;id&quot;</span><span class="fu">:</span> <span class="st">&quot;g_01J...&quot;</span><span class="fu">,</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;volume&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;uuid&quot;</span><span class="fu">:</span> <span class="st">&quot;...&quot;</span><span class="fu">,</span> <span class="dt">&quot;device&quot;</span><span class="fu">:</span> <span class="st">&quot;/dev/disk4s1&quot;</span><span class="fu">,</span> <span class="dt">&quot;label&quot;</span><span class="fu">:</span> <span class="st">&quot;HD1&quot;</span><span class="fu">},</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;actions&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;mount&quot;</span><span class="ot">,</span> <span class="st">&quot;unmount&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;created_at&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-11-03T10:00:00Z&quot;</span><span class="fu">,</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;expires_at&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-11-03T10:15:00Z&quot;</span><span class="fu">,</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;reason&quot;</span><span class="fu">:</span> <span class="st">&quot;copy footage from the camera card&quot;</span><span class="fu">,</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;client&quot;</span><span class="fu">:</span> <span class="st">&quot;Claude Desktop&quot;</span><span class="fu">,</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;state&quot;</span><span class="fu">:</span> <span class="st">&quot;active&quot;</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<ul>
+<li><strong>In-memory only</strong>, owned by the controller process. No
+grant file to forge, edit, or leave behind. Session death invalidates
+every grant.</li>
+<li><strong>Identity</strong>: a request carries
+<code>request_id</code>; approval mints a separate, unguessable
+<code>grant_id</code>. Only the <code>grant_id</code> is accepted by
+action tools.</li>
+<li><strong>Bound identity</strong>: approval snapshots UUID + device +
+label; use re-resolves the live volume and refuses if the device or
+label changed (relabelled or swapped disks fail closed, matching
+invariant 7).</li>
+<li><strong>Time</strong>: <code>expires_at</code> is checked on every
+use. Revocation is immediate.</li>
+<li><strong>One operation at a time</strong> still applies: a grant
+authorizes, it does not queue. A second concurrent action gets
+<code>409 operation_in_progress</code>.</li>
+<li><strong>Destructive flags are not representable</strong> in a
+grant.</li>
+</ul>
+<h2 id="privilege-and-auth-boundary">Privilege and auth boundary</h2>
+<ul>
+<li>The adapter runs as the user and holds an <strong>agent
+token</strong>: read tools, <code>request_grant</code>, and grant-scoped
+mutations. It cannot mint, approve, or deny a grant.</li>
+<li><strong>MCP mode has no human token.</strong>
+<code>web --mcp-session</code> mints only the agent token, prints one
+JSON line to the adapter's stdout pipe, and serves the approval page
+behind a single-use nonce. There is no session cookie to steal and no
+token in any URL. The normal menu-bar mode keeps today's single launch
+token and cookie exchange unchanged.</li>
+<li>The controller keeps the existing web invariants: loopback
+<code>Host</code> allow-list, <code>X-NTFSMNT</code> +
+<code>Origin</code> on mutations, constant-time token compare, and
+<code>HttpOnly</code>/<code>SameSite=Strict</code> where a cookie
+exists.</li>
+<li>The sudoers rule still names <strong><code>web</code> only</strong>,
+pointing at root-owned code. No new NOPASSWD entry is added by this
+spec.</li>
+<li>Mutation routes gain one branch: an agent-token request must carry
+<code>X-NTFSMNT-GRANT: &lt;grant_id&gt;</code>; a human cookie request
+works as it does today. Mount, unmount, and eject have no typed
+confirmation today — only <code>--remove-hiberfile</code> does, and
+agents cannot request it.</li>
+</ul>
+<p>Residual risks, stated rather than hidden:</p>
+<ul>
+<li>The approval nonce appears in the browser URL and in the adapter's
+memory for the life of one request. A same-user process that can read
+<code>ps</code> could observe it and approve that one request; it
+expires on use or with the request.</li>
+<li>A compromised adapter is equivalent to the user's own shell. The
+boundary protects against the <em>model</em>, not against arbitrary code
+running as the user.</li>
+</ul>
+<h2 id="audit">Audit</h2>
+<p>Append-only JSONL at <code>/var/db/ntfsmnt/audit.jsonl</code>
+(<code>root:wheel</code>, <code>0600</code>), created by the installer
+(<code>/var/db/ntfsmnt</code> is <code>root:wheel</code>). One line per
+event:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;ts&quot;</span><span class="fu">:</span><span class="st">&quot;2026-11-03T10:01:02Z&quot;</span><span class="fu">,</span><span class="dt">&quot;event&quot;</span><span class="fu">:</span><span class="st">&quot;grant.approved&quot;</span><span class="fu">,</span><span class="dt">&quot;grant&quot;</span><span class="fu">:</span><span class="st">&quot;g_01J...&quot;</span><span class="fu">,</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a> <span class="dt">&quot;volume&quot;</span><span class="fu">:</span><span class="st">&quot;HD1&quot;</span><span class="fu">,</span><span class="dt">&quot;device&quot;</span><span class="fu">:</span><span class="st">&quot;/dev/disk4s1&quot;</span><span class="fu">,</span><span class="dt">&quot;actions&quot;</span><span class="fu">:</span><span class="ot">[</span><span class="st">&quot;mount&quot;</span><span class="ot">]</span><span class="fu">,</span><span class="dt">&quot;client&quot;</span><span class="fu">:</span><span class="st">&quot;Claude Desktop&quot;</span><span class="fu">,</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a> <span class="dt">&quot;actor&quot;</span><span class="fu">:</span><span class="st">&quot;uid:501&quot;</span><span class="fu">}</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;ts&quot;</span><span class="fu">:</span><span class="st">&quot;2026-11-03T10:01:05Z&quot;</span><span class="fu">,</span><span class="dt">&quot;event&quot;</span><span class="fu">:</span><span class="st">&quot;mount.ok&quot;</span><span class="fu">,</span><span class="dt">&quot;grant&quot;</span><span class="fu">:</span><span class="st">&quot;g_01J...&quot;</span><span class="fu">,</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a> <span class="dt">&quot;volume&quot;</span><span class="fu">:</span><span class="st">&quot;HD1&quot;</span><span class="fu">,</span><span class="dt">&quot;mount&quot;</span><span class="fu">:</span><span class="st">&quot;/Volumes/HD1&quot;</span><span class="fu">,</span><span class="dt">&quot;probe&quot;</span><span class="fu">:</span><span class="st">&quot;ok&quot;</span><span class="fu">}</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;ts&quot;</span><span class="fu">:</span><span class="st">&quot;2026-11-03T10:03:00Z&quot;</span><span class="fu">,</span><span class="dt">&quot;event&quot;</span><span class="fu">:</span><span class="st">&quot;grant.denied&quot;</span><span class="fu">,</span><span class="dt">&quot;request&quot;</span><span class="fu">:</span><span class="st">&quot;r_01J...&quot;</span><span class="fu">,</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a> <span class="dt">&quot;reason&quot;</span><span class="fu">:</span><span class="st">&quot;user declined&quot;</span><span class="fu">}</span></span></code></pre></div>
+<p>Events: <code>mcp.session.start</code>, <code>grant.requested</code>,
+<code>grant.approved</code>, <code>grant.denied</code>,
+<code>grant.expired</code>, <code>grant.revoked</code>,
+<code>action.refused</code> (with code), <code>mount.ok</code>,
+<code>mount.fail</code>, <code>unmount.ok</code>,
+<code>unmount.fail</code>, <code>eject.ok</code>,
+<code>eject.fail</code>. No file contents, no volume paths beyond the
+mount point.</p>
+<p><strong>Audit failure is a safety decision, not an
+afterthought.</strong> If the append fails, <code>mount</code> and
+<code>eject</code> fail closed (<code>audit_unavailable</code>);
+<code>unmount</code> proceeds and writes the failure to stderr, because
+leaving a volume mounted is worse than a missing line.
+<code>ntfsmnt audit --json</code> is a follow-up, not this spec.</p>
+<h2 id="distribution">Distribution</h2>
+<ul>
+<li><strong>PyPI</strong>: <code>uvx ntfsmnt mcp</code> runs the
+adapter. <code>mcp</code> is part of the base install (no extra) because
+the adapter is stdlib HTTP; the controller's <code>[web]</code> extra is
+installed once by the privileged installer, not by <code>uvx</code>.
+Keep <code>[web]</code> as the only extra unless the adapter needs a new
+dependency.</li>
+<li><strong>Homebrew</strong>: same formula; <code>ntfsmnt mcp</code>
+needs no new deps.</li>
+<li><strong>npm</strong>: stays a finder/proxy
+(<code>npx ntfsmnt mcp</code>), never bundles FUSE-T.</li>
+<li><strong>MCP registry</strong>: <code>server.json</code> with one
+package entry, <code>stdio</code> transport, tool list, and a link to
+<code>docs/AGENT.md</code>. Submit to the official registry and Smithery
+in the same release.</li>
+<li><strong>Demo</strong>: <code>ntfsmnt demo</code> attaches a small
+bundled NTFS image with <code>hdiutil</code> (exact flags verified in
+M4, not guessed here) so the hero flow runs with no external disk. Demo
+mode is explicitly labeled disposable.</li>
+<li>One-time privileged install remains:
+<code>sudo ./scripts/install-privileged.sh</code> (already required by
+the menu-bar app). The README's agent quickstart adds this step and
+nothing else.</li>
+</ul>
+<h2 id="format-expansion--options">Format expansion — options</h2>
+<p>Decision now: keep tools format-agnostic and add a
+<code>Backend</code> seam; do not build a second backend in this spec.
+Documented options for the next step:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Shape</th>
+<th>NTFS</th>
+<th>exFAT / APFS</th>
+<th>Install weight</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>F1</strong> Backend registry (recommended)</td>
+<td>one binary, one MCP server, <code>Backend</code> protocol</td>
+<td>ntfs-3g + FUSE-T</td>
+<td>macOS native (<code>diskutil</code>, <code>mount</code>)</td>
+<td>unchanged</td>
+<td>Ship when a second format has users</td>
+</tr>
+<tr>
+<td>F2 Capability packs</td>
+<td>gateway + per-format packages</td>
+<td>pack</td>
+<td>pack</td>
+<td>larger</td>
+<td>Defer; only after F1 demand</td>
+</tr>
+<tr>
+<td>F3 <code>diskutil</code> shim</td>
+<td>shell out for everything non-NTFS</td>
+<td>ntfs-3g</td>
+<td><code>diskutil</code></td>
+<td>smallest</td>
+<td>Reject: no probe, no failure model</td>
+</tr>
+<tr>
+<td>F4 Stay NTFS-only</td>
+<td>no seam</td>
+<td>ntfs-3g</td>
+<td>—</td>
+<td>none</td>
+<td>Reject: forecloses the stated goal</td>
+</tr>
+</tbody>
+</table></div>
+<p>F1 design:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Backend(Protocol):</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    name: <span class="bu">str</span>                     <span class="co"># &quot;ntfs&quot;, &quot;exfat&quot;, &quot;apfs&quot;</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    can_handle(volume) <span class="op">-&gt;</span> <span class="bu">bool</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    mount(volume, options) <span class="op">-&gt;</span> MountResult</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    unmount(volume) <span class="op">-&gt;</span> UnmountResult</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    probe(mount_point) <span class="op">-&gt;</span> ProbeResult   <span class="co"># write/read/delete + ownership</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    repair_policy: Literal[<span class="st">&quot;never&quot;</span>]     <span class="co"># stays &quot;never&quot; for every backend</span></span></code></pre></div>
+<ul>
+<li>Tool names stay <code>mount_volume</code> /
+<code>unmount_volume</code>; the response includes
+<code>backend: "ntfs"</code> so an agent can explain what happened.</li>
+<li>The write probe, restore-on-failure, and no-repair rules are
+per-backend but identical in contract. exFAT has no journal; the
+dirty-volume refusal becomes "native mount failed → report, never
+repair."</li>
+<li>Grants bind to <code>(volume, backend)</code>. A format change on
+the same UUID is a different grant.</li>
+<li>Honest positioning: macOS already mounts exFAT and APFS read-write.
+The value there is orchestration, safe eject, diagnostics, and
+automation — not fixing a read-only mount. Marketing must not imply
+otherwise.</li>
+<li>Licensing: FUSE-T's non-commercial term applies to the NTFS backend
+only. Native exFAT/APFS keep a commercial path open.</li>
+<li>Naming options, to decide when F2/F1 lands: keep
+<code>ntfsmnt</code> (honest, narrow), rename to an umbrella
+(<code>volmnt</code>, <code>diskmnt</code>) and keep
+<code>ntfsmnt</code> as an alias, or ship a second package.
+Recommendation: keep <code>ntfsmnt</code> until a non-NTFS backend
+actually ships.</li>
+</ul>
+<h2 id="metrics">Metrics</h2>
+<p>Instrumentation is part of the spec, not an afterthought:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>How</th>
+<th>Target (initial)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Activation funnel</td>
+<td><code>mcp.session.start</code> → first read tool →
+<code>grant.requested</code> → approved → first mount</td>
+<td>≥ 40% of installs reach a mount in session 1</td>
+</tr>
+<tr>
+<td>Time to first mount</td>
+<td>adapter start → first successful mount</td>
+<td>p50 &lt; 5 min from a clean Mac</td>
+</tr>
+<tr>
+<td>Approval friction</td>
+<td>request → approve latency; denial rate</td>
+<td>p50 &lt; 30 s; denial &lt; 15%</td>
+</tr>
+<tr>
+<td>Safety</td>
+<td>MCP-initiated mutations with a valid grant / all MCP-initiated
+mutations</td>
+<td>100%</td>
+</tr>
+<tr>
+<td>Refusals</td>
+<td><code>action.refused</code> by code</td>
+<td>destructive via MCP: 0 attempts that succeed</td>
+</tr>
+<tr>
+<td>Audit completeness</td>
+<td>actions with a matching audit line (except
+<code>audit_unavailable</code> unmounts)</td>
+<td>100%</td>
+</tr>
+<tr>
+<td>Distribution</td>
+<td>registry installs, <code>uvx</code> downloads, stars</td>
+<td>week-over-week growth, no absolute promise</td>
+</tr>
+</tbody>
+</table></div>
+<p>Telemetry stays local by default: counts in the audit log, no network
+calls. A <code>ntfsmnt stats --json</code> reads the log; sharing is
+opt-in and documented.</p>
+<h2 id="milestones">Milestones</h2>
+<ol type="1">
+<li><strong>M1 — control layer</strong> (<code>ntfsmnt/control/</code>):
+grants, <code>flock</code>, audit writer, agent-token scope, injected
+clock and store. Unit-tested without root.</li>
+<li><strong>M2 — HTTP + approval UI</strong>: <code>--mcp-session</code>
+and <code>--exit-on-stdin-eof</code>, grant routes, approval page with
+nonce, agent-token branch on mutation routes. Tested with
+<code>TestClient</code>.</li>
+<li><strong>M3 — MCP adapter</strong>: six new tools, structured errors,
+<code>--no-browser</code> (stderr) fallback, contract tests against a
+real controller subprocess.</li>
+<li><strong>M4 — distribution</strong>: <code>server.json</code>,
+registry submission, <code>ntfsmnt demo</code> image, installer creates
+<code>/var/db/ntfsmnt</code>, README/<code>docs/AGENT.md</code>
+quickstart.</li>
+<li><strong>M5 — instrumentation</strong> (after v1):
+<code>ntfsmnt stats --json</code>, activation funnel report.</li>
+</ol>
+<p><strong>Doc truth:</strong> <code>AGENTS.md</code> currently says
+<code>ntfsmnt mcp</code> is read-only and "keep it that way." M3 must
+change that line to the grant-scoped contract (and
+<code>docs/AGENT.md</code>, <code>README.md</code>,
+<code>site/llms.txt</code>) in the same PR. Shipping action tools while
+the repo rules still claim read-only would be exactly the kind of
+dishonesty <code>AGENTS.md</code> forbids.</p>
+<h2 id="risks">Risks</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Browser approval is awkward over SSH / CI</td>
+<td><code>--no-browser</code> writes the URL to stderr; fail closed
+without a click</td>
+</tr>
+<tr>
+<td>Model invents grant ids</td>
+<td>Structured <code>grant_required</code> with the request flow; no
+retries</td>
+</tr>
+<tr>
+<td>Two controllers race</td>
+<td>Cross-process <code>flock</code> on
+<code>/var/run/ntfsmnt.lock</code></td>
+</tr>
+<tr>
+<td>Root controller outlives the adapter</td>
+<td><code>--exit-on-stdin-eof</code>; pipe closes on crash or
+SIGKILL</td>
+</tr>
+<tr>
+<td>Grant outlives intent</td>
+<td>Short TTL (≤ 30 min), in-memory, visible revoke</td>
+</tr>
+<tr>
+<td>Approval spam from a looping model</td>
+<td>3 pending requests max, deduplicated by volume+actions</td>
+</tr>
+<tr>
+<td>Audit write fails mid-action</td>
+<td><code>mount</code>/<code>eject</code> refuse; <code>unmount</code>
+proceeds and logs to stderr</td>
+</tr>
+<tr>
+<td>FUSE-T licence blocks paid distribution</td>
+<td>Backend seam; native formats avoid FUSE-T</td>
+</tr>
+<tr>
+<td>Name no longer fits exFAT</td>
+<td>Decide at F1; keep <code>ntfsmnt</code> until then</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="open-questions">Open questions</h2>
+<ol type="1">
+<li>Do we want Touch ID as an optional approval method before v1
+ships?</li>
+<li>Does the demo image belong in the wheel (size) or download on first
+use?</li>
+<li>When F1 lands, does <code>ntfsmnt</code> become the umbrella or stay
+the NTFS backend?</li>
+</ol>
+    <footer>
+      ntfsmnt · MCP action server · generated from
+      docs/specs/2026-11-03-mcp-action-server.md · palette from site/styles.css ·
+      no external requests
+    </footer>
+  </main>
+
+</div>
+</body>
+</html>
