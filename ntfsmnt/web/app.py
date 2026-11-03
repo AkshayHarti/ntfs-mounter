@@ -18,7 +18,12 @@ from ntfsmnt.web.events import EventBus
 from ntfsmnt.web.schemas import (ActionRequest, ActivityModel, ErrorResponse,
                                  StateModel, activity_model, error_response,
                                  result_model, state_model)
-from ntfsmnt.web.service import Service
+from ntfsmnt.web.service import Service, _Fail
+
+from ntfsmnt.control.audit import AuditLog
+from ntfsmnt.control.grants import GrantError
+from ntfsmnt.control.lock import OperationFileLock
+from ntfsmnt.web.auth import is_agent_request, require_agent
 
 PAGE_DIR = Path(__file__).parent / "page"
 
@@ -32,6 +37,38 @@ def _error(status: int, code: str, message: str, next_step: str | None = None):
         {"error": {"code": code, "message": message, "next_step": next_step}},
         status_code=status,
     )
+
+
+_GRANT_NEXT = {
+    "grant_required": "Call request_grant; a human must approve it first.",
+    "grant_expired": "Call request_grant again; grants expire.",
+    "grant_revoked": "Call request_grant again and ask for a fresh approval.",
+    "grant_mismatch": "The grant names a different volume.",
+    "grant_action_mismatch": "The grant does not include this action.",
+}
+
+
+async def _grant_check(request: Request, action: str, volume_id: str,
+                       body, svc: Service):
+    """Refuse an agent action before any runner call unless a grant allows it."""
+    if action == "mount":
+        for flag in ("recover", "remove_hiberfile"):
+            if getattr(body, flag, False):
+                return _error(
+                    403, "manual_required",
+                    f"`{flag}` is never granted to an agent.",
+                    f"run `sudo ntfsmnt mount --{flag.replace('_', '-')}` yourself",
+                )
+    try:
+        volume = svc.volume_by_id(volume_id)
+        svc.check_grant(request.headers.get("x-ntfsmnt-grant"), volume, action)
+    except _Fail as fail:
+        return _error(fail.error.status, fail.error.code, fail.error.message)
+    except GrantError as exc:
+        return _error(403, exc.code,
+                      f"the grant does not allow this: {exc.code}",
+                      _GRANT_NEXT.get(exc.code))
+    return None
 
 
 from ntfsmnt.web.auth import require_session  # noqa: F401  (re-exported)
@@ -144,7 +181,11 @@ async def _region_response(request: Request, svc: Service, state: StateModel,
 
 
 def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI:
-    svc = service or Service(settings)
+    svc = service or Service(
+        settings,
+        audit=AuditLog(),
+        file_lock=OperationFileLock() if settings.root else None,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -279,11 +320,22 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
 
     @app.post("/api/v1/volumes/{volume_id}/{action}")
     async def act(volume_id: str, action: str, request: Request):
-        try:
-            require_mutation(settings, request)
-        except HTTPException as exc:
-            code = "unauthorized" if exc.status_code == 401 else "forbidden_origin"
-            return _error(exc.status_code, code, exc.detail)
+        agent = is_agent_request(request)
+        if agent:
+            try:
+                require_agent(settings, request)
+            except HTTPException as exc:
+                return _error(401, "unauthorized", exc.detail)
+            if request.headers.get("x-ntfsmnt") != "1":
+                return _error(403, "forbidden_origin", "missing X-NTFSMNT header")
+            if request.headers.get("origin") not in settings.allowed_origins:
+                return _error(403, "forbidden_origin", "origin not allowed")
+        else:
+            try:
+                require_mutation(settings, request)
+            except HTTPException as exc:
+                code = "unauthorized" if exc.status_code == 401 else "forbidden_origin"
+                return _error(exc.status_code, code, exc.detail)
         if action not in ACTIONS:
             return _error(404, "not_found", f"Unknown action {action!r}.")
         try:
@@ -293,6 +345,10 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
             return _error(422, "invalid_request",
                           "Could not read the action request.",
                           "Send a JSON or form-encoded body.")
+        if agent:
+            refused = await _grant_check(request, action, volume_id, body, svc)
+            if refused is not None:
+                return refused
         try:
             result = await asyncio.to_thread(ACTIONS[action], volume_id, body)
         except Exception:
