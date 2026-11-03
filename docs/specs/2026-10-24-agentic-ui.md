@@ -1,9 +1,10 @@
 # Agentic UI (OpenUI Lang + AG-UI) — design
 
 **Date:** 2026-10-24
-**Status:** implemented behind `/agent` on 2026-10-24; the classic UI is still
-what the app opens, and browser acceptance (mount from a generated button,
-Quit-kill check) is pending live testing by the owner.
+**Status:** implemented behind `/agent` on 2026-10-24; promoted to `/` on
+2026-11-03 (the classic page moved to `/classic`, `/agent` is a 303 alias).
+Browser acceptance (mount from a generated button, Quit-kill check) is pending
+live testing by the owner.
 
 ## Problem
 
@@ -22,6 +23,8 @@ new way to reach those operations.
    what the menu-bar app opens. `/agent` links to it and it links back. Flipping
    the default is a one-line change, deliberately left to the owner: a
    generated UI should not silently become the only way to unmount a disk.
+   **Superseded 2026-11-03:** the owner flipped the default — `/` is the agent
+   page, the classic page is at `/classic`, and `/agent` redirects to `/`.
 2. **OpenUI Lang, fixed registry.** The agent composes a program from a closed
    component library (`Root`, `Stack`, `Card`, `VolumeCard`, `Button`,
    `Banner`, …). The same registry is served as JSON, used to build the model

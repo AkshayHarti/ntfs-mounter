@@ -155,11 +155,31 @@ def test_htmx_form_post_returns_fragment(monkeypatch):
 def test_page_renders_master_detail():
     c, _ = client()
     c.get("/?token=tok")
-    r = c.get("/")
+    r = c.get("/classic")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/html")
     assert 'id="volumes-region"' in r.text
     assert "HD1" in r.text
+
+
+def test_homepage_is_agent():
+    c, _ = client()
+    c.get("/?token=tok")
+    r = c.get("/")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    assert "agent.js" in r.text
+
+
+def test_homepage_refreshes_the_doctor(monkeypatch):
+    c, svc = client()
+    c.get("/?token=tok")
+    refreshes = []
+    real = svc.refresh_doctor
+    monkeypatch.setattr(svc, "refresh_doctor",
+                        lambda: refreshes.append(1) or real())
+    assert c.get("/").status_code == 200
+    assert refreshes
 
 
 def test_partial_requires_session():

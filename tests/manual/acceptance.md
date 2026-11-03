@@ -334,8 +334,9 @@ HD1 after the CLI acceptance above, from the same Full Disk Access terminal.
 
 ## Agent UI manual acceptance (same terminal)
 
-8. Open `/agent` from the dashboard link; a "live view" turn announces the
-   volumes without being asked; the masthead badge reads "agent".
+8. The dashboard opens on the agent homepage (`/`); a "live view" turn announces the
+   volumes without being asked; the masthead badge reads "agent". The
+   *Classic dashboard* chip goes to `/classic`; `/agent` redirects to `/`.
 9. The nav chips start a turn each; typing *"mount HD1"* replies with a
    VolumeCard and a Mount button; clicking it runs the same flow as step 2 and
    then adds a fresh "live view" turn. The narration never claims the mount

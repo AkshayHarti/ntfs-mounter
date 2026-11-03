@@ -73,7 +73,7 @@ def register_agent_routes(app: FastAPI, settings: Settings, svc, templates) -> N
                     "<code>sudo ntfsmnt web</code>.</p>",
                     status_code=401,
                 )
-            response = RedirectResponse("/agent", status_code=303)
+            response = RedirectResponse("/", status_code=303)
             response.set_cookie(
                 settings.cookie_name, cookie_value(settings.token),
                 httponly=True, samesite="strict", path="/",
@@ -86,7 +86,7 @@ def register_agent_routes(app: FastAPI, settings: Settings, svc, templates) -> N
                 "<p>ntfsmnt: relaunch with <code>sudo ntfsmnt web</code>.</p>",
                 status_code=401,
             )
-        return templates.TemplateResponse(request, "agent.html", {"settings": settings})
+        return RedirectResponse("/", status_code=303)
 
     @app.get("/agent/library")
     async def library(request: Request):

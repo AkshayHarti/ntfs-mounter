@@ -221,6 +221,20 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
                 status_code=401,
             )
         await asyncio.to_thread(svc.refresh_doctor)
+        return templates.TemplateResponse(
+            request, "agent.html", {"settings": settings},
+        )
+
+    @app.get("/classic", response_class=HTMLResponse)
+    async def classic(request: Request):
+        try:
+            require_session(settings, request)
+        except HTTPException:
+            return HTMLResponse(
+                "<p>ntfsmnt: relaunch with <code>sudo ntfsmnt web</code>.</p>",
+                status_code=401,
+            )
+        await asyncio.to_thread(svc.refresh_doctor)
         snap = await _state_for(svc)
         return templates.TemplateResponse(
             request, "index.html",
