@@ -216,6 +216,11 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="how a human approves a grant (default: browser)")
     mcp.add_argument("--no-browser", action="store_true",
                      help="print the approval URL to stderr instead of opening it")
+    mcp.add_argument("--demo", action="store_true",
+                     help="download and attach the disposable demo image first")
+
+    demo = sub.add_parser("demo", help="attach the disposable NTFS demo image")
+    demo.add_argument("--json", action="store_true")
     return parser
 
 
@@ -425,8 +430,30 @@ def _cmd_mcp(args: argparse.Namespace, collector: Callable[[], list[Volume]]) ->
     # action tools start the root controller lazily on first use.
     from ntfsmnt.mcp import serve
 
+    if getattr(args, "demo", False):
+        from ntfsmnt.demo import DemoError, attach_image, ensure_image
+        try:
+            attach_image(ensure_image())
+        except DemoError as exc:
+            print(f"ntfsmnt: {exc}", file=sys.stderr)
+            return 1
     return serve(sys.stdin, sys.stdout, approve=args.approve,
                  no_browser=args.no_browser)
+
+
+def _cmd_demo(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
+    from ntfsmnt.demo import DemoError, attach_image, ensure_image
+
+    try:
+        device = attach_image(ensure_image())
+    except DemoError as exc:
+        print(f"ntfsmnt: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"device": device, "disposable": True}))
+    else:
+        print(f"demo attached: {device} (read-only, disposable)")
+    return 0
 
 
 COMMANDS = {
@@ -438,6 +465,7 @@ COMMANDS = {
     "eject": _cmd_eject,
     "web": _cmd_web,
     "mcp": _cmd_mcp,
+    "demo": _cmd_demo,
 }
 
 
