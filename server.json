@@ -1,0 +1,45 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "name": "io.github.akshayharti/ntfsmnt",
+  "description": "Mount macOS NTFS volumes read-write with ntfs-3g. Read tools run anywhere; every mount, unmount, or eject needs a narrow, expiring grant a human approves in the browser. FUSE-T and ntfs-3g are host prerequisites, not included in the package.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/AkshayHarti/ntfs-mounter",
+    "source": "github"
+  },
+  "websiteUrl": "https://akshayharti.github.io/ntfs-mounter/",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "ntfsmnt",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "valueHint": "command",
+          "value": "mcp"
+        }
+      ]
+    }
+  ],
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "tools": [
+        "list_volumes",
+        "get_status",
+        "run_doctor",
+        "request_grant",
+        "mount_volume",
+        "unmount_volume",
+        "eject_volume",
+        "list_grants",
+        "revoke_grant"
+      ],
+      "notes": "recover and remove_hiberfile are never grantable and stay human-only."
+    }
+  }
+}
