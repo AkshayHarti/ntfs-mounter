@@ -34,7 +34,8 @@ is the new thing.
 - **G1** `ntfsmnt mcp` gains action tools: `mount_volume`, `unmount_volume`,
   `eject_volume`, plus `request_grant`, `list_grants`, `revoke_grant`.
 - **G2** No action runs without a grant bound to one volume, a set of actions, and
-  a TTL. Grants are approved by a human in the browser; nothing is auto-approved.
+  a TTL. A human approves it — browser click by default, optional Touch ID —
+  and nothing is auto-approved.
 - **G3** The grant layer lives in `ntfsmnt/`, not in the MCP adapter, so Option B
   (daemon) is a packaging change: same interface, different host process.
 - **G4** Distribution is one line (`uvx ntfsmnt mcp`), with an MCP registry
@@ -65,7 +66,7 @@ Rejected alternatives:
 |---|---|
 | Widen the sudoers rule to `mcp` | Adds a second root entry point; the rule stays `web` only |
 | Run the MCP server as root directly | Every MCP client becomes root-capable; no approval boundary |
-| Touch ID per action | Breaks the hero demo; still needs a controller for state |
+| Touch ID as the *only* approval | Breaks the uvx one-liner and headless use; it ships as an optional method instead |
 | A real daemon now | Install friction kills the one-line demo; no demand proven |
 
 ## Architecture
@@ -182,10 +183,39 @@ Rules:
    (100 ms backoff, capped at the request's `wait_seconds`, default 90, max 300)
    and returns `approved` / `denied` / `timeout`.
 
-The browser click is the gate. Without it no grant exists, so no action can run.
+The human gesture is the gate. Without an approval no grant exists, so no
+action can run.
 `--no-browser` writes the approval URL to **stderr** (stdout is the JSON-RPC
 channel) for a human to open manually; if nobody can, the request times out and
 actions fail closed with `approval_unavailable`.
+
+### Touch ID (optional)
+
+Decision: ship it, as an *optional* approval method — never the only one.
+
+Constraint, stated up front: the controller runs as root and is not attached to
+the user's GUI session, so it cannot raise a biometric prompt itself. The prompt
+must come from a process in the user's session.
+
+- The menu-bar app ships a small Swift helper (`ntfsmnt-approve`) using
+  `LAContext` with `.deviceOwnerAuthentication` (password fallback allowed).
+- With `--approve touchid`, the adapter hands the nonce to that helper on
+  **stdin** and the helper shows "Approve mount of HD1 for Claude Desktop?".
+  On success it POSTs to the same approve route; the nonce remains the
+  authority and Touch ID is the gesture.
+- No helper (uvx-only install), no enrolled biometrics, or a denied prompt →
+  fall back to the browser page on the next attempt. Never auto-approve.
+- The model cannot invoke the helper or satisfy the gesture. Even the adapter
+  can only *open* the prompt, not answer it — though a compromised adapter could
+  bypass the helper entirely, since it holds the nonce. Touch ID protects
+  against the model and against a mistaken click; nothing local protects
+  against a compromised adapter.
+- Out of scope: WebAuthn on the approval page. It is the better long-term
+  answer, but it needs a registration ceremony and ECDSA verification — not v1.
+
+Consequence for distribution: Touch ID is an app-user feature. The `uvx` path
+keeps the browser click and stays a one-liner.
+
 
 
 ## Grant model
@@ -280,9 +310,14 @@ missing line. `ntfsmnt audit --json` is a follow-up, not this spec.
 - **MCP registry**: `server.json` with one package entry, `stdio` transport,
   tool list, and a link to `docs/AGENT.md`. Submit to the official registry and
   Smithery in the same release.
-- **Demo**: `ntfsmnt demo` attaches a small bundled NTFS image with `hdiutil`
-  (exact flags verified in M4, not guessed here) so the hero flow runs with no
-  external disk. Demo mode is explicitly labeled disposable.
+- **Demo**: the image is **downloaded on first use**, not bundled. A pinned
+  SHA-256 lives in the package; `ntfsmnt demo` fetches it into
+  `~/Library/Caches/ntfsmnt/demo.img`, verifies the hash, and attaches it
+  read-only. A mismatch deletes the file and refuses. The controller then treats
+  it as any other block device — a user-attached image is no more trusted than a
+  USB stick, and gets the same guards. `ntfsmnt mcp --demo` runs the same
+  download-and-attach before serving, so the hero video needs no external disk.
+  Exact `hdiutil` flags are verified in M4, not guessed here. No new MCP tool.
 - One-time privileged install remains: `sudo ./scripts/install-privileged.sh`
   (already required by the menu-bar app). The README's agent quickstart adds
   this step and nothing else.
@@ -323,10 +358,11 @@ class Backend(Protocol):
   a read-only mount. Marketing must not imply otherwise.
 - Licensing: FUSE-T's non-commercial term applies to the NTFS backend only.
   Native exFAT/APFS keep a commercial path open.
-- Naming options, to decide when F2/F1 lands: keep `ntfsmnt` (honest, narrow),
-  rename to an umbrella (`volmnt`, `diskmnt`) and keep `ntfsmnt` as an alias, or
-  ship a second package. Recommendation: keep `ntfsmnt` until a non-NTFS
-  backend actually ships.
+- **Naming: keep `ntfsmnt`.** When F1 lands it becomes the umbrella package
+  name with per-format backends inside — no rename, no alias, no second
+  package. The name starts narrow and the tool response's `backend` field
+  carries the honesty; renaming would cost the existing installs, docs, and
+  registry entries for a word.
 
 ## Metrics
 
@@ -351,12 +387,14 @@ Telemetry stays local by default: counts in the audit log, no network calls. A
    agent-token scope, injected clock and store. Unit-tested without root.
 2. **M2 — HTTP + approval UI**: `--mcp-session` and `--exit-on-stdin-eof`,
    grant routes, approval page with nonce, agent-token branch on mutation
-   routes. Tested with `TestClient`.
-3. **M3 — MCP adapter**: six new tools, structured errors, `--no-browser`
-   (stderr) fallback, contract tests against a real controller subprocess.
-4. **M4 — distribution**: `server.json`, registry submission, `ntfsmnt demo`
-   image, installer creates `/var/db/ntfsmnt`, README/`docs/AGENT.md`
-   quickstart.
+   routes, and the Touch ID helper handshake (helper itself built by
+   `scripts/build-app.sh`). Tested with `TestClient`.
+3. **M3 — MCP adapter**: six new tools, structured errors, `--approve
+   browser|touchid`, `--no-browser` (stderr) fallback, contract tests against a
+   real controller subprocess.
+4. **M4 — distribution**: `server.json`, registry submission, demo download
+   with pinned hash and `ntfsmnt mcp --demo`, installer creates
+   `/var/db/ntfsmnt`, README/`docs/AGENT.md` quickstart.
 5. **M5 — instrumentation** (after v1): `ntfsmnt stats --json`, activation
    funnel report.
 
@@ -376,13 +414,19 @@ dishonesty `AGENTS.md` forbids.
 | Root controller outlives the adapter | `--exit-on-stdin-eof`; pipe closes on crash or SIGKILL |
 | Grant outlives intent | Short TTL (≤ 30 min), in-memory, visible revoke |
 | Approval spam from a looping model | 3 pending requests max, deduplicated by volume+actions |
+| Touch ID missing, unenrolled, or denied | Fall back to the browser page; never auto-approve |
+| Demo download blocked or hash mismatch | Refuse; no mirror fallback, no unverified image |
 | Audit write fails mid-action | `mount`/`eject` refuse; `unmount` proceeds and logs to stderr |
 | FUSE-T licence blocks paid distribution | Backend seam; native formats avoid FUSE-T |
 | Name no longer fits exFAT | Decide at F1; keep `ntfsmnt` until then |
 
-## Open questions
+## Decisions
 
-1. Do we want Touch ID as an optional approval method before v1 ships?
-2. Does the demo image belong in the wheel (size) or download on first use?
-3. When F1 lands, does `ntfsmnt` become the umbrella or stay the NTFS backend?
+Answered 2026-11-03; these are no longer open.
+
+1. **Touch ID** — yes, optional, through the menu-bar app's helper. The browser
+   click remains the default and the fallback.
+2. **Demo image** — downloaded on first use, hash-pinned. Not in the wheel.
+3. **Naming at F1** — `ntfsmnt` stays and becomes the umbrella.
+
 
