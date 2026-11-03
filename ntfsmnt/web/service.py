@@ -9,6 +9,7 @@ from itertools import count
 from threading import Lock
 
 from ntfsmnt.cli import real_run
+from ntfsmnt.control.audit import AuditLog, NullAudit
 from ntfsmnt.control.grants import GrantStore
 from ntfsmnt.diskutil import read_all_infos
 from ntfsmnt.doctor import HARD_CHECK_NAMES, Check, Env, run_checks
@@ -64,6 +65,7 @@ class Service:
         doctor_env: Env | None = None,
         clock: Callable[[], datetime] = utcnow,
         grants: GrantStore | None = None,
+        audit: AuditLog | NullAudit | None = None,
     ) -> None:
         self.settings = settings
         self._discover = discover
@@ -73,6 +75,7 @@ class Service:
         self.events = events or EventBus()
         self.activity_log = activity or ActivityLog()
         self.grants = grants or GrantStore(clock=clock)
+        self.audit: AuditLog | NullAudit = audit or NullAudit()
         self._doctor = DoctorStatus(status="ok", checked_at="", findings=())
         self._doctor_env = doctor_env
         self._clock = clock

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>ntfsmnt — approve an action</title>
+<style>
+  :root { color-scheme: light dark; --fg:#1c1c1e; --muted:#6b6b70; --bg:#f6f6f4;
+          --card:#ffffff; --line:#dcdcd8; --accent:#0a5cff; --danger:#b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#f2f2f0; --muted:#a0a0a6; --bg:#151517; --card:#1f1f22;
+            --line:#333338; --accent:#6ea0ff; --danger:#ff8a80; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center;
+         background:var(--bg); color:var(--fg);
+         font:16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { width:min(34rem, calc(100vw - 2rem)); background:var(--card);
+         border:1px solid var(--line); border-radius:12px; padding:1.75rem; }
+  h1 { font-size:1.15rem; margin:0 0 .25rem; }
+  p.lead { margin:0 0 1.25rem; color:var(--muted); }
+  dl { display:grid; grid-template-columns:auto 1fr; gap:.5rem 1rem;
+       margin:0 0 1.25rem; }
+  dt { color:var(--muted); }
+  dd { margin:0; word-break:break-word; }
+  ul { margin:0; padding-left:1.1rem; }
+  .reason { border-left:3px solid var(--line); padding-left:.75rem;
+            color:var(--muted); margin:0 0 1.25rem; }
+  form { display:inline; }
+  .actions { display:flex; gap:.75rem; flex-wrap:wrap; }
+  button { font:inherit; border-radius:8px; padding:.6rem 1.1rem;
+           border:1px solid var(--line); background:transparent; color:var(--fg);
+           cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent);
+                   color:#fff; }
+  button.deny { color:var(--danger); border-color:var(--danger); }
+  footer { margin-top:1.25rem; font-size:.8rem; color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Approve this action?</h1>
+  <p class="lead">{{ client }} asked ntfsmnt for narrow, expiring permission.</p>
+  <dl>
+    <dt>Volume</dt><dd>{{ volume }} <span>({{ device }})</span></dd>
+    <dt>Actions</dt>
+    <dd><ul>{% for action in actions %}<li>{{ action }}</li>{% endfor %}</ul></dd>
+    <dt>Lasts</dt><dd>{{ ttl_seconds }} seconds</dd>
+  </dl>
+  {% if reason %}<p class="reason">{{ reason }}</p>{% endif %}
+  <div class="actions">
+    <form method="post" action="/api/v1/grants/{{ request_id }}/approve">
+      <input type="hidden" name="nonce" value="{{ nonce }}">
+      <button class="primary" type="submit">Approve</button>
+    </form>
+    <form method="post" action="/api/v1/grants/{{ request_id }}/deny">
+      <input type="hidden" name="nonce" value="{{ nonce }}">
+      <button class="deny" type="submit">Deny</button>
+    </form>
+  </div>
+  <footer>This link works once. ntfsmnt never approves anything on its own.</footer>
+</main>
+</body>
+</html>

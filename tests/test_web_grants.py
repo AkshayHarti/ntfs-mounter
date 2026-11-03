@@ -153,3 +153,128 @@ def test_routes_require_the_agent_token():
                                           "actions": ["mount"]}).status_code == 401
     assert c.get("/api/v1/grants/r_x").status_code == 401
     assert c.delete("/api/v1/grants/g_x").status_code == 401
+
+
+def pending_of(service, c, **body):
+    request_id = request_grant(c, **body).json()["request_id"]
+    return request_id, service.grants.pending(request_id)
+
+
+def test_approval_page_lists_volume_actions_ttl_and_reason():
+    c, service = client()
+    request_id, pending = pending_of(service, c, reason="copy footage")
+
+    r = c.get(f"/approve/{request_id}?nonce={pending.nonce}")
+
+    assert r.status_code == 200
+    for text in ("HD1", "mount", "unmount", "900", "copy footage", "Claude Desktop"):
+        assert text in r.text
+
+
+def test_approval_page_rejects_a_wrong_nonce_without_details():
+    c, service = client()
+    request_id, _ = pending_of(service, c)
+
+    r = c.get(f"/approve/{request_id}?nonce=wrong")
+
+    assert r.status_code == 403
+    assert "HD1" not in r.text
+
+
+def test_approval_page_sets_referrer_policy_no_referrer():
+    c, service = client()
+    request_id, pending = pending_of(service, c)
+
+    r = c.get(f"/approve/{request_id}?nonce={pending.nonce}")
+
+    assert r.headers["referrer-policy"] == "no-referrer"
+
+
+def test_approve_needs_origin_and_nonce():
+    c, service = client()
+    request_id, pending = pending_of(service, c)
+
+    no_origin = c.post(f"/api/v1/grants/{request_id}/approve",
+                       headers={"X-NTFSMNT-APPROVAL": pending.nonce})
+    assert no_origin.status_code == 403
+
+    no_nonce = c.post(f"/api/v1/grants/{request_id}/approve",
+                      headers={"Origin": "http://testserver"})
+    assert no_nonce.status_code == 403
+
+
+def test_approve_with_nonce_and_origin_mints_the_grant():
+    c, service = client()
+    request_id, pending = pending_of(service, c)
+
+    r = c.post(f"/api/v1/grants/{request_id}/approve",
+               headers={"Origin": "http://testserver",
+                        "X-NTFSMNT-APPROVAL": pending.nonce})
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "approved"
+    assert service.grants.pending(request_id).status == "approved"
+
+
+def test_approve_rejects_an_agent_token():
+    c, service = client()
+    request_id, pending = pending_of(service, c)
+
+    r = c.post(f"/api/v1/grants/{request_id}/approve",
+               headers={"Origin": "http://testserver",
+                        "X-NTFSMNT-APPROVAL": pending.nonce,
+                        "Authorization": "Bearer agent"})
+
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "human_approval_required"
+
+
+def test_nonce_is_single_use():
+    c, service = client()
+    request_id, pending = pending_of(service, c)
+    headers = {"Origin": "http://testserver", "X-NTFSMNT-APPROVAL": pending.nonce}
+
+    assert c.post(f"/api/v1/grants/{request_id}/approve", headers=headers).status_code == 200
+    second = c.post(f"/api/v1/grants/{request_id}/approve", headers=headers)
+
+    assert second.status_code == 403
+    assert second.json()["error"]["code"] == "approval_consumed"
+
+
+def test_deny_marks_the_request_denied():
+    c, service = client()
+    request_id, pending = pending_of(service, c)
+
+    r = c.post(f"/api/v1/grants/{request_id}/deny",
+               headers={"Origin": "http://testserver",
+                        "X-NTFSMNT-APPROVAL": pending.nonce})
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "denied"
+    assert service.grants.pending(request_id).status == "denied"
+
+
+def test_approve_and_deny_are_audited():
+    from ntfsmnt.control.audit import AuditLog
+    from ntfsmnt.web.service import Service as Svc
+
+    settings = make_settings(agent_token="agent")
+    service = Svc(settings, discover=lambda: [make_volume()], run=FakeRun(),
+                  mounts=lambda: [], audit=AuditLog(_tmp_audit_path()),
+                  doctor_env=Env(lambda p: True, lambda a: (0, ""), 0,
+                                 lambda p: "libfuse-t", lambda: None))
+    c = TestClient(create_app(settings, service=service))
+    request_id, pending = pending_of(service, c)
+
+    c.post(f"/api/v1/grants/{request_id}/approve",
+           headers={"Origin": "http://testserver",
+                    "X-NTFSMNT-APPROVAL": pending.nonce})
+
+    events = [entry["event"] for entry in service.audit.read()]
+    assert "grant.approved" in events
+
+
+def _tmp_audit_path():
+    import tempfile
+    from pathlib import Path
+    return Path(tempfile.mkdtemp()) / "audit.jsonl"
