@@ -63,3 +63,24 @@ def test_cookie_matches_only_its_token():
 def test_non_ascii_presented_never_matches():
     assert not cookie_matches("tok", "ÿ")
     assert not cookie_matches("tok", "\udcff")
+
+
+def test_mcp_session_mints_an_agent_token_but_still_has_a_human_token():
+    s = make(token=None, mcp_session=True)
+    assert s.agent_token and s.token and s.agent_token != s.token
+    assert len(s.agent_token) >= 43
+
+
+def test_normal_mode_has_no_agent_token():
+    assert make().agent_token is None
+
+
+def test_mcp_session_with_explicit_token_keeps_it():
+    s = make(token="tok", mcp_session=True)
+    assert s.token == "tok"
+    assert s.agent_token and s.agent_token != "tok"
+
+
+def test_exit_on_stdin_eof_is_off_by_default():
+    assert make().exit_on_stdin_eof is False
+    assert make(exit_on_stdin_eof=True).exit_on_stdin_eof is True
