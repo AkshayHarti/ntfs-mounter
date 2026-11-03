@@ -211,7 +211,7 @@ def _build_parser() -> argparse.ArgumentParser:
     web.add_argument("--exit-on-stdin-eof", action="store_true",
                      help="stop when the parent closes stdin")
 
-    sub.add_parser("mcp", help="read-only MCP server on stdio (list, status, doctor)")
+    sub.add_parser("mcp", help="MCP server on stdio (read + grant-scoped actions)")
     return parser
 
 
@@ -417,8 +417,8 @@ def _cmd_web(args: argparse.Namespace, collector: Callable[[], list[Volume]]) ->
 
 
 def _cmd_mcp(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
-    # The agent surface stays read-only: importing here keeps `ntfsmnt mcp`
-    # from depending on the web extra, and the tools list has no mount verb.
+    # Imported here so the read tools keep working without the web extra; the
+    # action tools start the root controller lazily on first use.
     from ntfsmnt.mcp import serve
 
     return serve(sys.stdin, sys.stdout)

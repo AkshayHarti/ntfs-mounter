@@ -27,14 +27,18 @@ def test_initialize_announces_tools_capability() -> None:
     assert reply["result"]["serverInfo"]["name"] == "ntfsmnt"
 
 
-def test_tools_list_is_read_only() -> None:
+def test_tools_list_covers_read_and_action_tools() -> None:
     tools = rpc("tools/list")["result"]["tools"]
     names = {tool["name"] for tool in tools}
-    assert names == {"list_volumes", "get_status", "run_doctor"}
+    assert names == {"list_volumes", "get_status", "run_doctor",
+                     "request_grant", "mount_volume", "unmount_volume",
+                     "eject_volume", "list_grants", "revoke_grant"}
     # No tool takes anything that would change a disk: no verbs, no flags.
     for tool in tools:
         assert tool["inputSchema"].get("additionalProperties") is False
         assert "action" not in tool["inputSchema"]["properties"]
+        assert "recover" not in tool["inputSchema"]["properties"]
+        assert "remove_hiberfile" not in tool["inputSchema"]["properties"]
 
 
 def test_list_volumes_returns_snapshots() -> None:
