@@ -211,7 +211,11 @@ def _build_parser() -> argparse.ArgumentParser:
     web.add_argument("--exit-on-stdin-eof", action="store_true",
                      help="stop when the parent closes stdin")
 
-    sub.add_parser("mcp", help="MCP server on stdio (read + grant-scoped actions)")
+    mcp = sub.add_parser("mcp", help="MCP server on stdio (read + grant-scoped actions)")
+    mcp.add_argument("--approve", choices=("browser", "touchid"), default="browser",
+                     help="how a human approves a grant (default: browser)")
+    mcp.add_argument("--no-browser", action="store_true",
+                     help="print the approval URL to stderr instead of opening it")
     return parser
 
 
@@ -421,7 +425,8 @@ def _cmd_mcp(args: argparse.Namespace, collector: Callable[[], list[Volume]]) ->
     # action tools start the root controller lazily on first use.
     from ntfsmnt.mcp import serve
 
-    return serve(sys.stdin, sys.stdout)
+    return serve(sys.stdin, sys.stdout, approve=args.approve,
+                 no_browser=args.no_browser)
 
 
 COMMANDS = {

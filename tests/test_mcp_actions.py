@@ -1,6 +1,8 @@
 import io
 import json
 
+import pytest
+
 from ntfsmnt.mcp import call_tool, handle, serve
 from ntfsmnt.mcp_client import ControllerError
 from tests.web_helpers import make_volume
@@ -221,3 +223,133 @@ def test_serve_ignores_notifications_and_records_the_client_name():
     assert len(lines) == 2  # the notification got no reply
     assert seen["client"] == "Claude Desktop"
     assert seen["closed"] is True
+
+
+from types import SimpleNamespace
+from ntfsmnt.mcp_client import open_approval
+
+
+def test_browser_mode_calls_open_url_and_returns_true():
+    seen = []
+    assert open_approval("http://127.0.0.1:1/approve/r_1?nonce=n",
+                         open_url=lambda url: seen.append(url) or True) is True
+    assert seen == ["http://127.0.0.1:1/approve/r_1?nonce=n"]
+
+
+def test_touchid_pipes_the_nonce_on_stdin_not_argv(tmp_path):
+    helper = tmp_path / "ntfsmnt-approve"
+    helper.write_text("#!/bin/sh\n")
+    helper.chmod(0o755)
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen["argv"] = argv
+        seen["input"] = kwargs["input"]
+        return SimpleNamespace(returncode=0)
+
+    result = open_approval(
+        "http://127.0.0.1:1/approve/r_1?nonce=SECRET", mode="touchid",
+        helper=str(helper),
+        request={"request_id": "r_1", "nonce": "SECRET", "volume": "HD1",
+                 "actions": ["mount"]},
+        run=run, open_url=lambda url: pytest.fail("must not open a browser"),
+    )
+
+    assert result is True
+    assert "SECRET" not in " ".join(seen["argv"])
+    assert "SECRET" in seen["input"]
+
+
+def test_missing_helper_falls_back_to_the_browser_once(tmp_path):
+    seen = []
+    result = open_approval(
+        "http://x/approve", mode="touchid",
+        helper=str(tmp_path / "nope"), request={"nonce": "n"},
+        open_url=lambda url: seen.append(url) or True,
+    )
+
+    assert result is True
+    assert seen == ["http://x/approve"]
+
+
+def test_helper_exit_2_falls_back_to_the_browser(tmp_path):
+    helper = tmp_path / "ntfsmnt-approve"
+    helper.write_text("#!/bin/sh\n")
+    helper.chmod(0o755)
+    seen = []
+
+    result = open_approval(
+        "http://x/approve", mode="touchid", helper=str(helper),
+        request={"nonce": "n"},
+        run=lambda argv, **kw: SimpleNamespace(returncode=2),
+        open_url=lambda url: seen.append(url) or True,
+    )
+
+    assert result is True
+    assert seen == ["http://x/approve"]
+
+
+def test_helper_exit_0_does_not_open_the_browser(tmp_path):
+    helper = tmp_path / "ntfsmnt-approve"
+    helper.write_text("#!/bin/sh\n")
+    helper.chmod(0o755)
+
+    result = open_approval(
+        "http://x/approve", mode="touchid", helper=str(helper),
+        request={"nonce": "n"},
+        run=lambda argv, **kw: SimpleNamespace(returncode=0),
+        open_url=lambda url: pytest.fail("must not open a browser"),
+    )
+
+    assert result is True
+
+
+def test_helper_exit_3_is_a_denial_not_a_fallback(tmp_path):
+    helper = tmp_path / "ntfsmnt-approve"
+    helper.write_text("#!/bin/sh\n")
+    helper.chmod(0o755)
+
+    result = open_approval(
+        "http://x/approve", mode="touchid", helper=str(helper),
+        request={"nonce": "n"},
+        run=lambda argv, **kw: SimpleNamespace(returncode=3),
+        open_url=lambda url: pytest.fail("must not open a browser"),
+    )
+
+    assert result is False
+
+
+def test_no_browser_mode_prints_the_url_to_stderr(capsys):
+    result = open_approval("http://x/approve", mode="none",
+                           open_url=lambda url: pytest.fail("must not open"))
+
+    captured = capsys.readouterr()
+    assert result is False
+    assert "http://x/approve" in captured.err
+    assert captured.out == ""
+
+
+def test_request_grant_opens_the_page_and_never_returns_the_url():
+    opened = []
+    fake = FakeController(
+        post=lambda p, b, e: {"request_id": "r_1", "status": "approved",
+                              "grant_id": "g_1", "wait_seconds": 0,
+                              "approval_url":
+                                  "http://127.0.0.1:9/approve/r_1?nonce=n"})
+
+    result = call_tool("request_grant", {"volume": "HD1", "actions": ["mount"]},
+                       controller=fake, sleep=lambda s: None, clock=Clock(),
+                       opener=lambda url, **kw: opened.append((url, kw)))
+
+    assert opened[0][0] == "http://127.0.0.1:9/approve/r_1?nonce=n"
+    assert opened[0][1]["request"]["nonce"] == "n"
+    assert "approval_url" not in result["content"][0]["text"]
+
+
+def test_mcp_parser_accepts_approve_and_no_browser():
+    from ntfsmnt.cli import _build_parser
+
+    args = _build_parser().parse_args(["mcp", "--approve", "touchid",
+                                       "--no-browser"])
+    assert args.approve == "touchid"
+    assert args.no_browser is True

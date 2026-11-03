@@ -8,17 +8,67 @@ an agent token, and the human token never leaves the controller process.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
+import webbrowser
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 CLI = "/usr/local/libexec/ntfsmnt/bin/ntfsmnt"
 SUDO = "/usr/bin/sudo"
+APPROVE_HELPER = "ntfsmnt-approve"
+APP_DIRS = ("/Applications/ntfsmnt.app/Contents/MacOS",
+            str(Path.home() / "Applications/ntfsmnt.app/Contents/MacOS"))
+
+
+def resolve_helper(helper: str | None = None) -> str | None:
+    candidates = [helper] if helper else [
+        os.environ.get("NTFSMNT_APPROVE_HELPER"),
+        *(str(Path(directory) / APPROVE_HELPER) for directory in APP_DIRS),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def open_approval(url: str, *, mode: str = "browser", helper: str | None = None,
+                  request: dict | None = None,
+                  run: Any = subprocess.run,
+                  open_url: Any = webbrowser.open) -> bool:
+    """Get a human to the approval page.
+
+    `touchid` tries the app's LAContext helper first; a missing helper, a
+    non-zero exit other than an explicit denial, or any launch failure falls
+    back to the browser exactly once. `none` prints the URL to stderr because
+    stdout is the JSON-RPC channel.
+    """
+    if mode == "none":
+        print(f"ntfsmnt: approve here: {url}", file=sys.stderr, flush=True)
+        return False
+    if mode == "touchid" and request is not None:
+        path = resolve_helper(helper)
+        if path is not None:
+            payload = {**request, "url": url}
+            try:
+                completed = run([path], input=json.dumps(payload),
+                                capture_output=True, text=True)
+            except OSError:
+                completed = None
+            if completed is not None:
+                if completed.returncode == 0:
+                    return True
+                if completed.returncode == 3:
+                    return False
+    return bool(open_url(url))
+
 
 
 class ControllerError(Exception):

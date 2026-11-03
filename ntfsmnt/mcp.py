@@ -28,11 +28,12 @@ import sys
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
+from urllib.parse import parse_qs, urlsplit
 
 from ntfsmnt import __version__
 from ntfsmnt.cli import _as_dict, _discover, _doctor_env
 from ntfsmnt.doctor import run_checks
-from ntfsmnt.mcp_client import ControllerError, start_controller
+from ntfsmnt.mcp_client import ControllerError, open_approval, start_controller
 from ntfsmnt.volumes import VolumeError, resolve
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -182,7 +183,9 @@ def _read_tool(name: str, arguments: dict, collect) -> dict:
 
 
 def _request_grant(arguments: dict, controller, client_name: str,
-                   *, sleep=time.sleep, clock=time.monotonic) -> dict:
+                   *, sleep=time.sleep, clock=time.monotonic,
+                   opener=open_approval, approve: str = "browser",
+                   no_browser: bool = False) -> dict:
     actions = arguments.get("actions")
     if not isinstance(actions, list) or not actions:
         raise ValueError("request_grant needs a non-empty `actions` list")
@@ -207,6 +210,14 @@ def _request_grant(arguments: dict, controller, client_name: str,
     try:
         created = controller.post("/api/v1/grants", body)
         request_id = created["request_id"]
+        approval_url = created.get("approval_url")
+        if approval_url:
+            nonce = parse_qs(urlsplit(approval_url).query).get("nonce", [""])[0]
+            opener(approval_url,
+                   mode="none" if no_browser else approve,
+                   request={"request_id": request_id, "nonce": nonce,
+                            "volume": volume, "actions": actions,
+                            "client": client_name})
         wait_seconds = float(created.get("wait_seconds", 90))
         deadline = clock() + wait_seconds
         status = created.get("status", "pending")
@@ -254,7 +265,8 @@ def _action_tool(name: str, arguments: dict, controller, collect) -> dict:
 
 def call_tool(name: str, arguments: dict, *, collect=_discover, controller=None,
               client_name: str = "mcp", sleep=time.sleep,
-              clock=time.monotonic) -> dict:
+              clock=time.monotonic, opener=open_approval,
+              approve: str = "browser", no_browser: bool = False) -> dict:
     if name not in SUPPORTED_TOOLS:
         raise ValueError(f"unknown tool {name!r}")
     if name in READ_TOOLS:
@@ -267,7 +279,8 @@ def call_tool(name: str, arguments: dict, *, collect=_discover, controller=None,
         )
     if name == "request_grant":
         return _request_grant(arguments, controller, client_name,
-                              sleep=sleep, clock=clock)
+                              sleep=sleep, clock=clock, opener=opener,
+                              approve=approve, no_browser=no_browser)
     if name in ("mount_volume", "unmount_volume", "eject_volume"):
         return _action_tool(name, arguments, controller, collect)
     if name == "list_grants":
@@ -328,8 +341,11 @@ def handle(request: object, **injections) -> dict | None:
                        "content": [{"type": "text", "text": str(exc)}]})
 
 
-def serve(stdin, stdout, *, controller_factory=None, **injections) -> int:
+def serve(stdin, stdout, *, controller_factory=None, approve: str = "browser",
+          no_browser: bool = False, **injections) -> int:
     """One JSON-RPC request per line; the controller starts on first action."""
+    injections.setdefault("approve", approve)
+    injections.setdefault("no_browser", no_browser)
     if controller_factory is None:
         def controller_factory():
             return start_controller(uid=os.getuid(), gid=os.getgid())
