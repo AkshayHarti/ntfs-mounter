@@ -110,3 +110,105 @@ def test_run_server_binds_prints_and_closes(monkeypatch, capsys):
     assert configs[0].kwargs == {"log_level": "warning", "access_log": False}
     assert runs == [[fake_sock]]
     assert fake_sock.closed
+
+
+class _FakeServerKit:
+    def __init__(self, monkeypatch):
+        import socket as socket_module
+        import types
+
+        created, configs, runs = [], [], []
+        outer = self
+        self.servers = []
+
+        class FakeSocket:
+            def __init__(self, *a, **kw):
+                self.closed = False
+                created.append(self)
+
+            def setsockopt(self, *a):
+                pass
+
+            def bind(self, address):
+                self.bound = address
+
+            def getsockname(self):
+                return ("127.0.0.1", 9123)
+
+            def close(self):
+                self.closed = True
+
+        class FakeConfig:
+            def __init__(self, app, **kwargs):
+                self.app, self.kwargs = app, kwargs
+                configs.append(self)
+
+        class FakeServer:
+            def __init__(self, config):
+                self.config = config
+                self.should_exit = False
+                outer.servers.append(self)
+
+            def run(self, sockets=None):
+                runs.append(sockets)
+
+        fake_uvicorn = types.ModuleType("uvicorn")
+        fake_uvicorn.Config = FakeConfig
+        fake_uvicorn.Server = FakeServer
+        monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+        monkeypatch.setattr(socket_module, "socket", FakeSocket)
+        self.created, self.configs, self.runs = created, configs, runs
+
+
+def test_mcp_session_prints_one_json_line(monkeypatch, capsys):
+    import json
+
+    from ntfsmnt.web.config import Settings
+
+    kit = _FakeServerKit(monkeypatch)
+    monkeypatch.setattr(web_app, "create_app", lambda *a, **kw: object())
+    monkeypatch.setattr(web_app, "_watch_stdin", lambda stream, exit_: None)
+
+    web_app.run_server(Settings(token="human", mcp_session=True,
+                                 agent_token="agent", exit_on_stdin_eof=True))
+
+    out = capsys.readouterr().out.splitlines()
+    assert len(out) == 1
+    assert json.loads(out[0]) == {
+        "ntfsmnt": "mcp-session", "port": 9123, "agent_token": "agent"}
+
+
+def test_mcp_session_never_prints_the_human_token(monkeypatch, capsys):
+    from ntfsmnt.web.config import Settings
+
+    _FakeServerKit(monkeypatch)
+    monkeypatch.setattr(web_app, "create_app", lambda *a, **kw: object())
+    monkeypatch.setattr(web_app, "_watch_stdin", lambda stream, exit_: None)
+
+    web_app.run_server(Settings(token="human", mcp_session=True,
+                                 agent_token="agent", exit_on_stdin_eof=True))
+
+    assert "human" not in capsys.readouterr().out
+
+
+def test_watch_stdin_calls_exit_on_eof():
+    import os
+    import threading
+    import time
+
+    read_fd, write_fd = os.pipe()
+    called = threading.Event()
+    stream = os.fdopen(read_fd)
+    os.close(write_fd)
+
+    web_app._watch_stdin(stream, called.set)
+
+    assert called.wait(2)
+    stream.close()
+
+
+def test_web_parser_accepts_mcp_session_flags():
+    args = _build_parser().parse_args(
+        ["web", "--mcp-session", "--exit-on-stdin-eof"])
+    assert args.mcp_session is True
+    assert args.exit_on_stdin_eof is True

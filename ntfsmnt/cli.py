@@ -206,6 +206,10 @@ def _build_parser() -> argparse.ArgumentParser:
                           "(e.g. http://127.0.0.1:11434 for Ollama)")
     web.add_argument("--agent-model", default="gpt-4o-mini", metavar="MODEL",
                      help="model name used with --agent-llm")
+    web.add_argument("--mcp-session", action="store_true",
+                     help="spawned by `ntfsmnt mcp`; print a JSON handshake")
+    web.add_argument("--exit-on-stdin-eof", action="store_true",
+                     help="stop when the parent closes stdin")
 
     sub.add_parser("mcp", help="read-only MCP server on stdio (list, status, doctor)")
     return parser
@@ -393,6 +397,8 @@ def _cmd_web(args: argparse.Namespace, collector: Callable[[], list[Volume]]) ->
             port=args.port, owner=args.owner, environ=os.environ,
             euid=os.geteuid(), open_browser=args.open,
             agent_llm=args.agent_llm, agent_model=args.agent_model,
+            mcp_session=args.mcp_session,
+            exit_on_stdin_eof=args.exit_on_stdin_eof,
         )
     except ValueError as exc:
         print(f"ntfsmnt: {exc}", file=sys.stderr)

@@ -2,6 +2,8 @@ import asyncio
 import hmac
 import json
 import logging
+import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
@@ -402,6 +404,23 @@ async def _publish_state(svc: Service, app: FastAPI) -> str:
         return app.state.last_state_json
 
 
+def _watch_stdin(stream, request_exit) -> threading.Thread:
+    """Exit the controller when its parent closes stdin, so no root server
+    outlives an MCP client that was killed."""
+
+    def watch() -> None:
+        try:
+            while stream.read(1):
+                pass
+        except (OSError, ValueError):
+            pass
+        request_exit()
+
+    thread = threading.Thread(target=watch, name="ntfsmnt-stdin", daemon=True)
+    thread.start()
+    return thread
+
+
 def run_server(settings: Settings) -> None:
     import socket
     import uvicorn
@@ -413,16 +432,35 @@ def run_server(settings: Settings) -> None:
         sock.bind((settings.host, settings.port))
         port = sock.getsockname()[1]
         settings = with_port(settings, port)
-        url = f"http://{settings.host}:{port}/?token={settings.token}"
-        print(f"ntfsmnt web: {url}", flush=True)
-        if settings.open_browser:
-            import webbrowser
-            webbrowser.open(url)
-        config = uvicorn.Config(
-            create_app(settings), log_level="warning", access_log=False,
-        )
+        service = None
+        if settings.mcp_session:
+            service = Service(
+                settings,
+                audit=AuditLog(),
+                file_lock=OperationFileLock() if settings.root else None,
+            )
+            try:
+                service.audit.append("mcp.session.start", client="mcp")
+            except Exception:
+                logger.warning("could not record mcp.session.start", exc_info=True)
+            print(json.dumps({
+                "ntfsmnt": "mcp-session",
+                "port": port,
+                "agent_token": settings.agent_token,
+            }), flush=True)
+        else:
+            url = f"http://{settings.host}:{port}/?token={settings.token}"
+            print(f"ntfsmnt web: {url}", flush=True)
+            if settings.open_browser:
+                import webbrowser
+                webbrowser.open(url)
+        app = create_app(settings, service=service) if service else create_app(settings)
+        config = uvicorn.Config(app, log_level="warning", access_log=False)
+        server = uvicorn.Server(config)
+        if settings.mcp_session and settings.exit_on_stdin_eof:
+            _watch_stdin(sys.stdin, lambda: setattr(server, "should_exit", True))
         try:
-            uvicorn.Server(config).run(sockets=[sock])
+            server.run(sockets=[sock])
         except KeyboardInterrupt:
             # uvicorn re-raises the captured SIGINT after a graceful shutdown;
             # the Ctrl-C that stops the service is not an error.
