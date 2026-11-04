@@ -41,6 +41,11 @@ plutil -lint "$bundle/Contents/Info.plist"
 swiftc -O -framework Cocoa "$root/app/MenuBar.swift" \
   -o "$bundle/Contents/MacOS/ntfsmnt-menu"
 
+# Optional Touch ID approval helper. It runs in the user's session because the
+# root controller cannot raise a biometric prompt.
+swiftc -O -framework LocalAuthentication "$root/app/Approve.swift" \
+  -o "$bundle/Contents/MacOS/ntfsmnt-approve"
+
 install -m 0755 "$installer" "$resources/install-privileged.sh"
 cmp -s "$installer" "$resources/install-privileged.sh" || {
   echo "build-app.sh: the bundled installer differs from $installer" >&2

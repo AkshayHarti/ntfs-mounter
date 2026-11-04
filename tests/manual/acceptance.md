@@ -348,4 +348,27 @@ HD1 after the CLI acceptance above, from the same Full Disk Access terminal.
     action, volume, summary, local time) and *Refresh* re-reads it. A refused
     action shows as failed, never as ok.
 12. `ntfsmnt mcp` answers `initialize`, `tools/list`, and `tools/call` for
-    `list_volumes` on one JSON object per stdin line; no tool mutates.
+    `list_volumes` on one JSON object per stdin line. (The action tools are
+    covered by the section below.)
+
+## MCP action server manual acceptance (same terminal)
+
+Run after the CLI and web acceptance above. `install-privileged.sh` must
+already be installed; it is the one-time step that lets an MCP client start the
+root controller without a prompt.
+
+1. `sudo ./scripts/install-privileged.sh` — idempotent; re-running is fine.
+2. `uvx ntfsmnt mcp --demo` in a client (or `uv run ntfsmnt mcp --demo` from a
+   checkout). `list_volumes` shows the attached demo image as unmounted.
+3. Ask the agent to mount it. The approval page opens. Click **Deny**; the
+   agent's retry gets `grant_required` and nothing mounts.
+4. Ask again and click **Approve**; the mount succeeds, the write probe passes,
+   and `mount.attempt` then `mount.ok` appear in
+   `/var/db/ntfsmnt/audit.jsonl`.
+5. With the app installed (`scripts/install-app.sh`), repeat with
+   `mcp --approve touchid`: the prompt appears. Denying Touch ID must **not**
+   fall through to an automatic approval.
+6. `SIGKILL` the MCP client, then run `pgrep -f "ntfsmnt web"`. No root
+   controller process may remain; the server exits on stdin EOF.
+7. Ask for `recover` and `remove_hiberfile` through `request_grant`; both refuse
+   with `manual_required` and name the CLI command a person must run.

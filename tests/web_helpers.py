@@ -17,10 +17,12 @@ def make_volume(*, mounts=(), **kw):
 
 def make_settings(*, token="tok", root=True, owner=(501, 20), read_only=False,
                   allowed_hosts=frozenset({"testserver"}),
-                  allowed_origins=frozenset({"http://testserver"})):
+                  allowed_origins=frozenset({"http://testserver"}),
+                  agent_token=None):
     return Settings(
         token=token, port=0, owner=owner, root=root, read_only=read_only,
         allowed_hosts=allowed_hosts, allowed_origins=allowed_origins,
+        agent_token=agent_token,
     )
 
 

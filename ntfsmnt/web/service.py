@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -9,13 +10,16 @@ from itertools import count
 from threading import Lock
 
 from ntfsmnt.cli import real_run
+from ntfsmnt.control.audit import AuditLog, AuditUnavailable, NullAudit
+from ntfsmnt.control.grants import GrantStore
+from ntfsmnt.control.lock import OperationFileLock
 from ntfsmnt.diskutil import read_all_infos
 from ntfsmnt.doctor import HARD_CHECK_NAMES, Check, Env, run_checks
 from ntfsmnt.identity import parse_pid, pid_pattern
 from ntfsmnt.mounter import MountFailed, MountResult, mount_volume
 from ntfsmnt.mounttable import MountEntry, read_mount_table
 from ntfsmnt.unmounter import UnmountFailed, eject_volume, unmount_volume
-from ntfsmnt.volumes import Volume, build_volumes
+from ntfsmnt.volumes import AmbiguousVolume, NoSuchVolume, Volume, build_volumes, resolve
 from ntfsmnt.web.config import Settings
 from ntfsmnt.web.events import ActivityLog, EventBus
 from ntfsmnt.web.models import (
@@ -40,6 +44,16 @@ class OperationInProgress(Exception):
     pass
 
 
+logger = logging.getLogger("ntfsmnt.web.service")
+
+_AUDIT_REFUSED = ActionError(
+    "audit_unavailable",
+    "The audit log is unavailable, so the action was refused.",
+    503,
+    "Fix /var/db/ntfsmnt ownership, or use the CLI.",
+)
+
+
 class _Fail(Exception):
     def __init__(self, error: ActionError) -> None:
         self.error = error
@@ -62,6 +76,9 @@ class Service:
         activity: ActivityLog | None = None,
         doctor_env: Env | None = None,
         clock: Callable[[], datetime] = utcnow,
+        grants: GrantStore | None = None,
+        audit: AuditLog | NullAudit | None = None,
+        file_lock: OperationFileLock | None = None,
     ) -> None:
         self.settings = settings
         self._discover = discover
@@ -70,6 +87,9 @@ class Service:
         self._sleep = sleep
         self.events = events or EventBus()
         self.activity_log = activity or ActivityLog()
+        self.grants = grants or GrantStore(clock=clock)
+        self.audit: AuditLog | NullAudit = audit or NullAudit()
+        self._file_lock = file_lock
         self._doctor = DoctorStatus(status="ok", checked_at="", findings=())
         self._doctor_env = doctor_env
         self._clock = clock
@@ -121,6 +141,56 @@ class Service:
             operation=self._operation,
             volumes=views,
         )
+
+    def grant_lookup(self, selector: str) -> Volume:
+        """Resolve a grant target without guessing: ambiguity is its own error."""
+        volumes = self._discover()
+        try:
+            return resolve(selector, volumes)
+        except AmbiguousVolume:
+            raise _Fail(ActionError(
+                "ambiguous_volume",
+                f"more than one volume matches {selector!r}; use the device name",
+                404,
+            )) from None
+        except NoSuchVolume:
+            raise _Fail(ActionError(
+                "volume_not_found", f"no volume matches {selector!r}", 404
+            )) from None
+
+    def volume_by_id(self, identifier: str) -> Volume:
+        for volume in self._discover():
+            if volume_id(volume) == identifier:
+                return volume
+        raise _Fail(ActionError(
+            "volume_not_found", f"no volume matches {identifier!r}", 404))
+
+    def check_grant(self, grant_id, volume: Volume, action: str):
+        return self.grants.check(grant_id, volume, action)
+
+    def _audit_attempt(self, action: str, volume: Volume, *, blocking: bool = True) -> bool:
+        """Write the pre-action line. A mount/eject that cannot log must not run."""
+        try:
+            self.audit.append(
+                f"{action}.attempt",
+                volume=volume.device.label, device=volume.device.device,
+            )
+            return True
+        except AuditUnavailable as exc:
+            if blocking:
+                return False
+            logger.warning("audit attempt for %s failed: %s", action, exc)
+            return True
+
+    def _audit_outcome(self, action: str, ok: bool, volume: Volume) -> None:
+        try:
+            self.audit.append(
+                f"{action}.ok" if ok else f"{action}.fail",
+                volume=volume.device.label, device=volume.device.device,
+            )
+        except AuditUnavailable as exc:
+            # Never hide a real result because the second line could not land.
+            logger.warning("audit outcome for %s failed: %s", action, exc)
 
     def _host(self) -> HostView:
         failed = {f.check for f in self._doctor.findings}
@@ -196,20 +266,27 @@ class Service:
 
     @contextmanager
     def operation(self, action: str, volume: str) -> Iterator[OperationView]:
-        if not self._lock.acquire(blocking=False):
+        file_lock = self._file_lock
+        if file_lock is not None and not file_lock.acquire():
             raise OperationInProgress
         try:
-            op = OperationView(
-                id=f"op-{next(self._op_ids)}", action=action, volume=volume,
-                started_at=iso(self._clock()),
-            )
-            self._operation = op
-            self.events.publish("operation", asdict(op))
-            yield op
+            if not self._lock.acquire(blocking=False):
+                raise OperationInProgress
+            try:
+                op = OperationView(
+                    id=f"op-{next(self._op_ids)}", action=action, volume=volume,
+                    started_at=iso(self._clock()),
+                )
+                self._operation = op
+                self.events.publish("operation", asdict(op))
+                yield op
+            finally:
+                self._operation = None
+                self.events.publish("operation", None)
+                self._lock.release()
         finally:
-            self._operation = None
-            self.events.publish("operation", None)
-            self._lock.release()
+            if file_lock is not None:
+                file_lock.release()
 
     def _resolve(self, target: str, label: str, size: int | None = None) -> tuple[Volume, list[Volume]]:
         volumes = self._discover()
@@ -274,6 +351,8 @@ class Service:
                         f"Type {label!r} to confirm removing the hibernation file.",
                         400, "The label must match exactly.")
                     return self._result("mount", error, label)
+                if not self._audit_attempt("mount", volume):
+                    return self._result("mount", _AUDIT_REFUSED, label)
                 try:
                     mount_volume(
                         volume, uid=self.settings.owner[0], gid=self.settings.owner[1],
@@ -282,7 +361,9 @@ class Service:
                         label_shared=self._shared(volume, volumes),
                     )
                 except MountFailed as exc:
+                    self._audit_outcome("mount", False, volume)
                     return self._mount_failure(exc, volume)
+                self._audit_outcome("mount", True, volume)
                 self._flags.pop(volume_id(volume), None)
                 return self._ok("mount", volume, f"{volume.device.label} is writable.", None)
         except OperationInProgress:
@@ -316,14 +397,17 @@ class Service:
                     return self._result("unmount", ActionError(
                         "not_mounted", f"{label} is not mounted read-write.", 409,
                         "Nothing to unmount."), label)
+                self._audit_attempt("unmount", volume, blocking=False)
                 try:
                     restored = unmount_volume(
                         volume, run=self._run, mounts=self._mounts, sleep=self._sleep,
                         keep_unmounted=False, label_shared=self._shared(volume, volumes),
                     )
                 except UnmountFailed as exc:
+                    self._audit_outcome("unmount", False, volume)
                     return self._result(
                         "unmount", self._unmount_error(exc, label), label)
+                self._audit_outcome("unmount", True, volume)
                 if not restored:
                     return self._result("unmount", ActionError(
                         "action_failed",
@@ -351,6 +435,8 @@ class Service:
                     return self._result("eject", ActionError(
                         "busy", f"{label} is mounted read-write.", 409,
                         "Unmount it first, then eject."), label)
+                if not self._audit_attempt("eject", volume):
+                    return self._result("eject", _AUDIT_REFUSED, label)
                 if volume.state == "ro":
                     # The read-only mount is Apple's; an Eject click means the
                     # whole disk goes, so tear the read-only mount down first
@@ -362,6 +448,7 @@ class Service:
                             label_shared=self._shared(volume, volumes),
                         )
                     except UnmountFailed as exc:
+                        self._audit_outcome("eject", False, volume)
                         return self._result(
                             "eject", self._unmount_error(exc, label), label)
                 try:
@@ -370,9 +457,11 @@ class Service:
                         label_shared=self._shared(volume, volumes),
                     )
                 except UnmountFailed as exc:
+                    self._audit_outcome("eject", False, volume)
                     return self._result("eject", ActionError(
                         "action_failed", str(exc), 500, None,
                         detail=str(exc), volume=label), label)
+                self._audit_outcome("eject", True, volume)
                 message = f"{label} ejected."
                 entry = self.activity_log.append("eject", label, True, message)
                 self.events.publish("activity", asdict(entry))

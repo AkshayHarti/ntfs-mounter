@@ -8,9 +8,11 @@ by the same signal when the child dies from one, so a shell sees the usual
 `128 + n` as a signal death. All behaviour — mounting, unmounting, the doctor,
 the web UI — stays in the Python package.
 
-> The first npm publish happens on the next `v*` tag. Until then `npx ntfsmnt`
-> has nothing to fetch; from a checkout use `npm link ./npm` to test the
-> wrapper.
+> The npm name is bootstrapped once with a throwaway prerelease
+> (`0.2.0-bootstrap.0`) before CI can publish anything. Until that one-time
+> step runs, `npx ntfsmnt` has nothing to fetch. See
+> [Releasing → npm first-publish bootstrap](RELEASING.md#4-npm-first-publish-bootstrap-one-time);
+> from a checkout, `npm link ./npm` tests the wrapper in the meantime.
 
 ## Use
 
@@ -74,10 +76,11 @@ Publisher** → **GitHub Actions**, enter exactly:
 | Workflow filename | `npm.yml` |
 | Environment | *(leave empty)* |
 
-The first publish claims the name; after that the trusted publisher is normal
-configuration. `npm` was unclaimed when this document was written (2026-10-24);
-if the registry rejects the name, someone claimed it in the meantime — stop and
-choose a different name before publishing.
+The bootstrap publish in
+[RELEASING.md](RELEASING.md#4-npm-first-publish-bootstrap-one-time) creates the
+package name first; this trusted publisher can then be added here, or from the
+CLI with `npm trust github`. Without it, `npm publish` from CI fails with
+`ENEEDAUTH`.
 
 ## Version sync
 

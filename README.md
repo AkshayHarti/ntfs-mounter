@@ -1,11 +1,13 @@
 # ntfsmnt
 
+<!-- mcp-name: io.github.akshayharti/ntfsmnt -->
+
 Read-write NTFS on macOS, from the command line.
 
 ## AI surfaces
 
 - `/` dashboard (alias `/agent`): natural-language intent composes UI from a closed component registry as OpenUI Lang, streamed over SSE as AG-UI events. Deterministic planner by default; optional OpenAI-compatible LLM adapter with validator + deterministic fallback. Agent proposes, you confirm — it never mounts, unmounts, or ejects. Classic page at `/classic`.
-- `ntfsmnt mcp`: read-only MCP server over stdio (`list_volumes`, `get_status`, `run_doctor`). No mount tool by design.
+- `ntfsmnt mcp`: grant-scoped MCP server over stdio. Three read tools (`list_volumes`, `get_status`, `run_doctor`) run anywhere; six action tools (mount, unmount, eject, grants) need a narrow, expiring grant a human approves. `--recover` and `--remove-hiberfile` are never grantable.
 - Agent docs: `docs/AGENT.md`, agent index: `site/llms.txt`. Details: [The agentic dashboard](#the-agentic-dashboard--alias-agent).
 
 macOS mounts NTFS read-only through its built-in FSKit driver. `ntfsmnt` replaces
@@ -138,8 +140,9 @@ The npm package is a dependency-free proxy: it finds the real Python CLI
 (Homebrew, `uv tool`, the root-owned copy, `~/.local/bin`, then `PATH`) and
 hands it your arguments unchanged; if none is installed it falls back to
 `uvx --from "ntfsmnt[web]" ntfsmnt`. It does not reimplement anything, and the
-macOS prerequisites above still apply. The first npm publish lands on the next
-`v*` tag; before that, `npm link ./npm` from a checkout. See
+macOS prerequisites above still apply. The package is bootstrapped with a
+`bootstrap`-tagged prerelease, then CI publishes real versions on `v*` tags;
+before the first publish, use `npm link ./npm` from a checkout. See
 [docs/NPM.md](docs/NPM.md).
 
 ### 5. From a checkout (development)
@@ -435,9 +438,24 @@ over SSE as **AG-UI** events. The classic page lives at `/classic`.
 - Destructive options (`--recover`, `--remove-hiberfile`) stay on the classic
   dashboard.
 
-`ntfsmnt mcp` runs a **read-only** MCP server on stdio (`list_volumes`,
-`get_status`, `run_doctor`) so AI clients can inspect volumes without any way
-to change them. See `docs/AGENT.md`.
+`ntfsmnt mcp` is an MCP server on stdio. Three read tools (`list_volumes`,
+`get_status`, `run_doctor`) need no privilege. Six more — `request_grant`,
+`mount_volume`, `unmount_volume`, `eject_volume`, `list_grants`,
+`revoke_grant` — let an agent finish the job inside a **narrow, expiring
+grant** that a human approves in the browser. `recover` and
+`remove-hiberfile` are never grantable.
+
+```bash
+sudo ./scripts/install-privileged.sh   # once: root CLI + narrow NOPASSWD rule
+uvx ntfsmnt mcp                        # what the AI client runs
+uvx ntfsmnt mcp --approve touchid      # optional Touch ID helper (app build)
+uvx ntfsmnt mcp --demo                 # attach the disposable demo image first
+```
+
+The adapter gets only an agent token; the human token stays in the root
+controller. `ntfsmnt demo` downloads a small image once into
+`~/Library/Caches/ntfsmnt/`, verifies its pinned hash, and attaches it
+read-only. See `docs/AGENT.md` and `server.json`.
 
 ## Menu-bar app
 
@@ -761,7 +779,7 @@ uv run pytest -q
 
 Without `--extra web` the FastAPI/Jinja API, page, and schema tests skip; the
 service, models, and config tests still run.
-The suite has 407 tests and never touches hardware. Subprocess effects
+The suite has 534 tests and never touches hardware. Subprocess effects
 (`diskutil`, `ntfs-3g`, `mount`, `pgrep`, `kill`, `sleep`) are injected as
 callables, and the mount-point creation, write probe, and ownership `stat` are
 monkeypatched in tests that exercise the orchestration.

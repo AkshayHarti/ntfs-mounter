@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>$title$</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfaf7;
+    --bg-2: #f2efe9;
+    --fg: #1c1b19;
+    --muted: #605e57;
+    --soft: #767065;
+    --rule: #e2ded6;
+    --rule-strong: #c9c3b8;
+    --code-bg: #f2efe9;
+    --accent: #a4471b;
+    --accent-2: rgba(164, 71, 27, 0.08);
+    --measure: 46rem;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131312; --bg-2: #1c1b19; --fg: #e9e6df; --muted: #a3a099;
+      --soft: #8a857c; --rule: #2b2a27; --rule-strong: #3d3a35;
+      --code-bg: #201f1d; --accent: #e3a373; --accent-2: rgba(227, 163, 115, 0.10);
+    }
+  }
+
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--sans); font-size: 1rem; line-height: 1.65;
+    font-kerning: normal; -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    display: grid; grid-template-columns: 15rem minmax(0, var(--measure));
+    gap: 3.5rem; justify-content: center;
+    max-width: 76rem; margin: 0 auto; padding: 3.5rem 1.5rem 5rem;
+  }
+
+  /* ── sidebar ─────────────────────────────────────────────────── */
+  .side { position: sticky; top: 2rem; align-self: start; max-height: calc(100vh - 4rem); overflow-y: auto; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--soft);
+  }
+  .side h1 {
+    margin: 0.55rem 0 0; font-size: 1.3rem; font-weight: 600;
+    letter-spacing: -0.02em; line-height: 1.25;
+  }
+  .side .meta {
+    margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--rule);
+    font-family: var(--mono); font-size: 0.66rem; line-height: 1.9; color: var(--muted);
+  }
+  .side .meta b { color: var(--fg); font-weight: 500; }
+  .side .links { margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--rule); }
+  .side .links a {
+    display: block; padding: 0.28rem 0; color: var(--muted);
+    font-size: 0.82rem; text-decoration: none;
+  }
+  .side .links a:hover { color: var(--accent); }
+
+  nav.toc { margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px solid var(--rule); }
+  nav.toc ul { list-style: none; margin: 0; padding: 0; }
+  nav.toc > ul > li { padding: 0.18rem 0; }
+  nav.toc a {
+    color: var(--muted); text-decoration: none; font-size: 0.8rem;
+    display: block; line-height: 1.4;
+  }
+  nav.toc a:hover { color: var(--accent); }
+  nav.toc ul ul { margin-left: 0.7rem; }
+  nav.toc ul ul a { font-size: 0.74rem; color: var(--soft); }
+
+  /* ── article ─────────────────────────────────────────────────── */
+  main { min-width: 0; }
+
+  h2 {
+    margin: 3rem 0 0.75rem; padding-top: 1.4rem; border-top: 1px solid var(--rule);
+    font-size: 1.45rem; font-weight: 600; letter-spacing: -0.015em; line-height: 1.25;
+  }
+  h2:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
+  h3 {
+    margin: 1.9rem 0 0.5rem; font-size: 1.08rem; font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  h4 { margin: 1.3rem 0 0.4rem; font-size: 0.95rem; font-weight: 600; }
+
+  p { margin: 0.75rem 0; }
+  strong { font-weight: 600; }
+  em { font-style: italic; }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  ul, ol { margin: 0.7rem 0; padding-left: 1.3rem; }
+  li { margin: 0.3rem 0; }
+  li > ul, li > ol { margin: 0.25rem 0; }
+
+  code {
+    font-family: var(--mono); font-size: 0.84em;
+    background: var(--code-bg); border: 1px solid var(--rule);
+    border-radius: 4px; padding: 0.08em 0.32em;
+  }
+  pre {
+    margin: 1rem 0; padding: 0.95rem 1.1rem; overflow-x: auto;
+    background: var(--code-bg); border: 1px solid var(--rule);
+    border-radius: 6px; line-height: 1.5;
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: 0.8rem; }
+
+  blockquote {
+    margin: 1rem 0; padding: 0.2rem 0 0.2rem 1.1rem;
+    border-left: 2px solid var(--accent); color: var(--muted);
+  }
+
+  .table-wrap { margin: 1.1rem 0; overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+  th {
+    text-align: left; font-family: var(--mono); font-size: 0.58rem;
+    letter-spacing: 0.11em; text-transform: uppercase; color: var(--soft);
+    background: var(--bg-2); border-bottom: 1px solid var(--rule-strong);
+    padding: 0.55rem 0.75rem; white-space: nowrap;
+  }
+  td { padding: 0.55rem 0.75rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td code { font-size: 0.78em; }
+
+  hr { border: 0; height: 1px; background: var(--rule); margin: 2rem 0; }
+
+  footer {
+    margin-top: 3.5rem; padding-top: 1.1rem; border-top: 1px solid var(--rule);
+    font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.04em;
+    color: var(--soft); line-height: 1.9;
+  }
+
+  @media (max-width: 860px) {
+    .shell { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; padding: 2rem 1.15rem 4rem; }
+    .side { position: static; max-height: none; overflow: visible; }
+    nav.toc { display: none; }
+    .side .links { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; }
+    .side .links a { display: inline; }
+  }
+
+  @media print {
+    .shell { display: block; max-width: none; padding: 0; }
+    .side { position: static; max-height: none; margin-bottom: 2rem; }
+    nav.toc { display: none; }
+    h2 { break-after: avoid; }
+    pre, table, blockquote { break-inside: avoid; }
+    a { color: inherit; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <aside class="side">
+    <div class="eyebrow">ntfsmnt · spec · 2026-11-03</div>
+    <h1>$title$</h1>
+    <div class="meta">
+      <div><b>Status</b> draft for review</div>
+      <div><b>Shape</b> A — toolbelt</div>
+      <div><b>Plan</b> to follow</div>
+    </div>
+    <div class="links">
+      <a href="agent-options.html">A/B/C options board</a>
+      <a href="overview.html">System overview</a>
+      <a href="../docs/AGENT.md">AGENT.md</a>
+    </div>
+    <nav class="toc" id="TOC">
+      $toc$
+    </nav>
+  </aside>
+
+  <main>
+$body$
+    <footer>
+      ntfsmnt · MCP action server · generated from
+      docs/specs/2026-11-03-mcp-action-server.md · palette from site/styles.css ·
+      no external requests
+    </footer>
+  </main>
+
+</div>
+</body>
+</html>

@@ -13,12 +13,13 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 ## Commands
 
 - Install deps: `uv sync` (add `--extra web` for the browser UI and its tests)
-- Test: `uv run pytest -q` (407 tests; without `--extra web` the FastAPI/Jinja
+- Test: `uv run pytest -q` (534 tests; without `--extra web` the FastAPI/Jinja
   API, page, and schema tests skip, while the service, models, and config tests
   run)
 - Prerequisite check: `./scripts/setup.sh --check` (read-only, exits 0 anywhere)
 - Prerequisites install: `./scripts/setup.sh` (FUSE-T cask + FUSE-T-linked ntfs-3g)
-- Release: see `docs/RELEASING.md`; version lives only in `ntfsmnt/__init__.py`
+- Release: see `docs/RELEASING.md`; bump all three synced versions:
+  `ntfsmnt/__init__.py` (source of truth), `npm/package.json`, `server.json`
 - App build: `bash scripts/build-app.sh` (unsigned bundle in `dist/`)
 - App install: `bash scripts/install-app.sh [--user] [--launch]`
 - Privileged setup: `sudo ./scripts/install-privileged.sh` (`--local` installs the
@@ -38,7 +39,11 @@ ntfsmnt/
   __init__.py      package marker
   __main__.py      python -m ntfsmnt entry point
   cli.py           argument parsing, command dispatch, JSON rendering
-  mcp.py           read-only MCP server over stdio (`ntfsmnt mcp`)
+  mcp.py           MCP server over stdio: read tools + grant-scoped actions
+  mcp_client.py    unprivileged controller client: JSON handshake, HTTP,
+                   browser/Touch ID approval opener
+  demo.py          hash-pinned demo image download and read-only attach
+  control/         grant store, append-only audit log, operation file lock, clock
   agent/           agentic UI core: OpenUI Lang parser/validator, AG-UI
                    events, optional LLM adapter, deterministic planner
   diskutil.py      plist parsing for diskutil list/info
@@ -54,14 +59,20 @@ ntfsmnt/
   privileged.py    single privilege-escalation path: sudo re-exec via need_root
   models.py        Device dataclass
   web/
-    app.py         FastAPI routes, auth boundary, middleware, SSE stream
-    service.py     snapshots, doctor refresh, mount/unmount/eject orchestration
+    app.py         FastAPI routes, auth boundary, middleware, SSE stream,
+                   MCP-session handshake
+    auth.py        shared auth boundary: session cookie, bearer agent token
+    grants.py      grant request/poll/list/revoke and the approval page
+    service.py     snapshots, doctor refresh, mount/unmount/eject orchestration,
+                   the grant check and the two-phase audit
     events.py      EventBus (SSE fanout + replay ring) and the activity log
-    config.py      Settings: token, cookie, hosts, origins, owner, port
+    config.py      Settings: token, agent token, cookie, hosts, origins,
+                   owner, port, MCP-session mode
     schemas.py     pydantic models for JSON responses and requests
     models.py      frozen dataclasses shared by service and schemas
     page/          index.html + fragments, app.css, app.js, vendored htmx
                    agent.html + agent.js + agent.css (the agentic surface)
+                   approve.html (single-use grant approval page)
                    opui-lang.js (the renderer's parser, mirrored from
                    agent/openui.py; run under node by test_agent_page_js.py)
 
@@ -128,21 +139,35 @@ docs/
 - `privileged.py` — the only root-escalation path; `os.execvp` through `sudo`.
 - `cli.py` — ties it together; resolves volume *before* privilege escalation,
   confirms destructive flags *before* escalation.
+- `mcp.py` — the stdio MCP server. Read tools never start the controller; the
+  six action tools use the agent token and a grant header it cannot mint.
+- `mcp_client.py` — the unprivileged half of an MCP session: `sudo -n ... web
+  --mcp-session`, the JSON handshake, the loopback HTTP client, and the
+  browser or Touch ID approval opener. Its only signal is `SIGTERM`.
+- `demo.py` — download once into `~/Library/Caches/ntfsmnt/`, verify the
+  pinned SHA-256, then `hdiutil attach -readonly -nomount`. An empty hash
+  refuses.
+- `control/` — grants, audit, and the operation file lock. They live here,
+  not in the web adapter, so a future local hub is a packaging change.
 - `web/app.py` — the HTTP surface: token→cookie exchange, the session/
-  `X-NTFSMNT`/Origin boundary, state and action routes, the SSE stream, and
-  the loopback host plus response-header middleware.
+  `X-NTFSMNT`/Origin boundary, state and action routes, the SSE stream, the
+  agent-token branch, and the loopback host plus response-header middleware.
 - `web/auth.py` — the shared auth boundary (session cookie, mutation header,
-  Origin) used by both pages.
+  Origin) plus the bearer agent token, which never opens the dashboard.
+- `web/grants.py` — grant request/poll/list/revoke for the agent, and the
+  single-use nonce approval page a human decides.
 - `web/agent.py` — the `/agent` routes: page, component library, and the
   AG-UI SSE run stream. It can refresh the doctor and propose actions; it
   never mounts, unmounts, or ejects.
 - `web/service.py` — takes the same snapshot the CLI prints, decides which
-  actions are enabled with the same predicates, and runs the CLI's
-  `mounter`/`unmounter` calls under a single operation lock.
+  actions are enabled with the same predicates, checks a grant on the agent
+  path, writes `attempt`/`ok|fail` audit lines, and runs the CLI's
+  `mounter`/`unmounter` calls under one in-process and one file lock.
 - `web/events.py` — in-process SSE bus with a 100-frame replay ring and the
   bounded activity log; publish is safe from worker threads.
-- `web/config.py` — launch token, session cookie, allowed hosts/origins, the
-  captured owner ids, and the read-only decision.
+- `web/config.py` — launch token, agent token, session cookie, allowed
+  hosts/origins, the captured owner ids, the read-only decision, and
+  MCP-session mode.
 - `web/schemas.py` / `web/models.py` — the JSON contract; the service produces
   dataclasses and `schemas` validates/serializes them.
 
@@ -219,9 +244,14 @@ CLI rules above. Do not weaken these either.
    root.
 7. **Read-only without root.** Without root (or without owner ids) every
    mutation is refused with a structured 403; state remains readable and the
-   page says why. Nothing re-execs `sudo` on the user's behalf — with one
-   sanctioned exception: the menu-bar app may start `web` through the narrow
-   `NOPASSWD` rule described under "Privileged install invariants".
+   page says why. Nothing re-execs `sudo` on the user's behalf — with two
+   sanctioned exceptions, both through the narrow `NOPASSWD` rule described
+   under "Privileged install invariants": the menu-bar app and `ntfsmnt mcp`
+   may start `web`.
+8. **An agent token is not a session.** A bearer agent token reaches the grant
+   routes and action routes only; it cannot open the dashboard, approve a
+   request, or mint a grant. Approval requires the single-use nonce from the
+   page, never the agent token.
 
 ## Privileged install invariants
 
@@ -239,8 +269,8 @@ a prompt. Do not weaken these.
 4. **Uninstall removes the rule first**, then the venv, so there is no window
    where the grant outlives the code.
 5. **No always-on service.** No LaunchDaemon, no login item; the server is a
-   child of the app and dies with it. The token travels only over the stdout
-   pipe, never a file.
+   child of the menu-bar app or of one MCP client session and dies with it. The
+   token travels only over the stdout pipe, never a file.
 6. **The app's `SIGKILL` is for its own server child only**, after `SIGTERM`
    and a 5 s wait. It must never target a mount, `ntfs-3g`, or any disk-related
    process; invariant 3 above still forbids `kill -9` there.
@@ -256,9 +286,16 @@ a prompt. Do not weaken these.
   fallback). The agent layer never mounts, unmounts, or ejects: generated
   buttons call the existing authenticated routes. Do not add an execution
   path to the agent, and do not render generated strings with `innerHTML`.
-- `ntfsmnt mcp` — read-only MCP server on stdio (`ntfsmnt/mcp.py`). Its tools
-  are `list_volumes`, `get_status`, `run_doctor`; there is deliberately no
-  mount tool. Keep it that way.
+- `ntfsmnt mcp` — MCP server on stdio (`ntfsmnt/mcp.py`). Nine tools:
+  `list_volumes`, `get_status`, `run_doctor`, `request_grant`,
+  `mount_volume`, `unmount_volume`, `eject_volume`, `list_grants`,
+  `revoke_grant`. Read tools need no grant. Every mutation requires a grant a
+  human approves in the browser (`--approve touchid` uses the optional
+  helper); the adapter holds only an agent token, never the human token, and
+  cannot mint, approve, or deny a grant. `--recover` and
+  `--remove-hiberfile` are never grantable. `uvx ntfsmnt mcp` is the
+  one-line install after the one-time `sudo ./scripts/install-privileged.sh`.
+  Do not add a destructive flag to a tool schema.
 - `site/llms.txt` — the agent-facing index of the docs.
 - `docs/AGENT.md` — user-facing doc for both surfaces.
 

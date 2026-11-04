@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<title>ntfsmnt — three agent shapes</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --c-paper:       #fbfaf7;
+    --c-paper-2:     #f2efe9;
+    --c-node:        #ffffff;
+    --c-node-2:      #f7f4ee;
+    --c-ink:         #1c1b19;
+    --c-muted:       #605e57;
+    --c-soft:        #767065;
+    --c-rule:        #e2ded6;
+    --c-rule-strong: #c9c3b8;
+    --c-accent:      #a4471b;
+    --c-accent-2:    rgba(164, 71, 27, 0.08);
+    --c-store:       rgba(28, 27, 25, 0.05);
+    --c-ext:         rgba(28, 27, 25, 0.03);
+    --c-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   Helvetica, Arial, sans-serif;
+    --c-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+                   "Liberation Mono", monospace;
+    --c-font-serif: Georgia, "Times New Roman", serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --c-paper: #131312; --c-paper-2: #1c1b19; --c-node: #201f1d;
+      --c-node-2: #26241f; --c-ink: #e9e6df; --c-muted: #a3a099;
+      --c-soft: #8a857c; --c-rule: #2b2a27; --c-rule-strong: #3d3a35;
+      --c-accent: #e3a373; --c-accent-2: rgba(227, 163, 115, 0.10);
+      --c-store: rgba(233, 230, 223, 0.05); --c-ext: rgba(233, 230, 223, 0.03);
+    }
+  }
+
+  body {
+    background: var(--c-paper); color: var(--c-ink);
+    font-family: var(--c-font-sans); font-size: 16px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 1240px; margin: 0 auto; padding: 56px 32px 72px; }
+
+  .eyebrow {
+    font-family: var(--c-font-mono); font-size: 0.63rem; font-weight: 500;
+    letter-spacing: 0.18em; text-transform: uppercase; color: var(--c-soft);
+  }
+  h1 {
+    margin-top: 14px; font-size: clamp(2rem, 4.2vw, 2.9rem); font-weight: 600;
+    line-height: 1.08; letter-spacing: -0.025em; max-width: 26ch;
+  }
+  .dek { margin-top: 18px; max-width: 72ch; font-size: 1.06rem; color: var(--c-muted); }
+
+  .brief {
+    margin-top: 28px; display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 1px; background: var(--c-rule); border: 1px solid var(--c-rule);
+    border-radius: 8px; overflow: hidden;
+  }
+  .brief div { background: var(--c-paper); padding: 14px 16px; }
+  .brief dt {
+    font-family: var(--c-font-mono); font-size: 0.58rem; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--c-soft);
+  }
+  .brief dd { margin-top: 4px; font-size: 0.9rem; font-weight: 500; }
+
+  hr.rule { height: 1px; background: var(--c-rule); border: 0; margin: 40px 0; }
+
+  h2 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.015em; line-height: 1.2; }
+  .lead { margin-top: 8px; max-width: 78ch; font-size: 0.95rem; color: var(--c-muted); }
+
+  /* ── option grid ────────────────────────────────────────────────── */
+  .options {
+    margin-top: 24px; display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 16px; align-items: stretch;
+  }
+  .opt {
+    display: flex; flex-direction: column; background: var(--c-paper);
+    border: 1px solid var(--c-rule); border-radius: 8px; padding: 20px;
+  }
+  .opt.recommended { border-color: var(--c-accent); background: var(--c-paper); }
+  .opt-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .opt-tag {
+    font-family: var(--c-font-mono); font-size: 0.6rem; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--c-soft);
+  }
+  .opt.recommended .opt-tag { color: var(--c-accent); }
+  .badge {
+    font-family: var(--c-font-mono); font-size: 0.52rem; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--c-accent);
+    border: 1px solid var(--c-accent); border-radius: 3px; padding: 1px 5px;
+  }
+  .opt h3 { margin-top: 6px; font-size: 1.15rem; font-weight: 600; letter-spacing: -0.01em; }
+  .thesis { margin-top: 6px; font-size: 0.86rem; color: var(--c-muted); min-height: 3.2em; }
+
+  .opt svg { width: 100%; height: auto; margin: 14px 0 6px; }
+
+  .scores { margin-top: 8px; border-top: 1px solid var(--c-rule); padding-top: 10px; }
+  .score {
+    display: grid; grid-template-columns: 1fr auto; align-items: center;
+    gap: 10px; padding: 4px 0; font-size: 0.78rem; color: var(--c-muted);
+  }
+  .dots { display: inline-flex; gap: 3px; }
+  .dots i {
+    width: 6px; height: 6px; border-radius: 50%;
+    border: 1px solid var(--c-rule-strong); background: transparent;
+  }
+  .dots i.on { background: var(--c-ink); border-color: var(--c-ink); }
+  .opt.recommended .dots i.on { background: var(--c-accent); border-color: var(--c-accent); }
+
+  .hook {
+    margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--c-rule);
+    font-size: 0.8rem; color: var(--c-muted);
+  }
+  .hook b {
+    display: block; font-family: var(--c-font-mono); font-size: 0.55rem;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--c-soft);
+    font-weight: 500; margin-bottom: 3px;
+  }
+
+  /* ── SVG type ────────────────────────────────────────────────────── */
+  svg text { font-family: var(--c-font-sans); }
+  .tag { font-family: var(--c-font-mono); font-size: 7px; letter-spacing: 0.12em; fill: var(--c-soft); }
+  .name { font-size: 11.5px; font-weight: 600; fill: var(--c-ink); }
+  .sub { font-family: var(--c-font-mono); font-size: 8.5px; fill: var(--c-muted); }
+  .sub-sm { font-family: var(--c-font-mono); font-size: 8px; fill: var(--c-soft); }
+  .arrow-label { font-family: var(--c-font-mono); font-size: 7.5px; letter-spacing: 0.05em; fill: var(--c-muted); }
+
+  .box-backend { fill: var(--c-node); stroke: var(--c-ink); stroke-width: 1; }
+  .box-soft    { fill: var(--c-node); stroke: var(--c-rule-strong); stroke-width: 1; }
+  .box-store   { fill: var(--c-store); stroke: var(--c-muted); stroke-width: 1; }
+  .box-ext     { fill: var(--c-ext); stroke: var(--c-soft); stroke-width: 1; }
+  .box-focal   { fill: var(--c-accent-2); stroke: var(--c-accent); stroke-width: 1.2; }
+  .layer       { fill: var(--c-node); stroke: var(--c-rule-strong); stroke-width: 1; }
+  .link        { fill: none; stroke: var(--c-muted); stroke-width: 1; }
+  .link-dash   { fill: none; stroke: var(--c-muted); stroke-width: 1; stroke-dasharray: 4 3; }
+  .mask        { fill: var(--c-paper); }
+
+  /* ── table ──────────────────────────────────────────────────────── */
+  .table-wrap { margin-top: 24px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th {
+    text-align: left; font-family: var(--c-font-mono); font-size: 0.58rem;
+    letter-spacing: 0.13em; text-transform: uppercase; color: var(--c-soft);
+    border-bottom: 1px solid var(--c-rule-strong); padding: 8px 12px;
+    white-space: nowrap;
+  }
+  td { padding: 11px 12px; border-bottom: 1px solid var(--c-rule); vertical-align: top; color: var(--c-muted); }
+  td:first-child { color: var(--c-ink); font-weight: 500; }
+  th.rec, td.rec { background: var(--c-accent-2); }
+  th.rec { color: var(--c-accent); }
+
+  /* ── wedge path ─────────────────────────────────────────────────── */
+  .path { margin-top: 28px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1px;
+          background: var(--c-rule); border: 1px solid var(--c-rule); border-radius: 8px; overflow: hidden; }
+  .step { background: var(--c-paper); padding: 18px 20px; }
+  .step .num {
+    font-family: var(--c-font-mono); font-size: 0.58rem; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--c-accent);
+  }
+  .step h4 { margin-top: 4px; font-size: 0.95rem; font-weight: 600; }
+  .step p { margin-top: 6px; font-size: 0.83rem; color: var(--c-muted); }
+  .step .when {
+    margin-top: 8px; font-family: var(--c-font-mono); font-size: 0.6rem;
+    color: var(--c-soft);
+  }
+
+  .note {
+    margin-top: 24px; padding: 16px 20px; border-left: 2px solid var(--c-accent);
+    background: var(--c-accent-2); font-size: 0.9rem; color: var(--c-muted);
+  }
+  .note strong { color: var(--c-ink); font-weight: 600; }
+
+  .viral { margin-top: 28px; display: grid; grid-template-columns: 1.1fr 1fr; gap: 16px; }
+  .viral > div { border: 1px solid var(--c-rule); border-radius: 8px; padding: 18px 20px; }
+  .viral h3 { font-size: 0.95rem; font-weight: 600; }
+  .viral ul { margin-top: 8px; list-style: none; }
+  .viral li { padding: 6px 0; border-top: 1px solid var(--c-rule); font-size: 0.85rem; color: var(--c-muted); }
+  .viral li code { font-family: var(--c-font-mono); font-size: 0.78rem; color: var(--c-ink); }
+
+  footer {
+    margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--c-rule);
+    font-family: var(--c-font-mono); font-size: 0.62rem; letter-spacing: 0.04em;
+    color: var(--c-soft); line-height: 1.8;
+  }
+
+  @media (max-width: 980px) {
+    .options { grid-template-columns: 1fr; }
+    .brief { grid-template-columns: repeat(2, 1fr); }
+    .path, .viral { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 560px) {
+    .page { padding: 36px 18px 56px; }
+    .brief { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <div class="eyebrow">ntfsmnt · agent options · 2026-11-03</div>
+    <h1>Three ways to give an agent disk hands</h1>
+    <p class="dek">Same product brief, three architectures. The winner is not the most
+      powerful one — it is the one whose install is one line, whose authority is narrow,
+      and whose upgrade path is a packaging change, not a rewrite.</p>
+  </header>
+
+  <dl class="brief">
+    <div><dt>Shape</dt><dd>Local MCP action server</dd></div>
+    <div><dt>Hero</dt><dd>“Mount it and copy the footage”</dd></div>
+    <div><dt>Authority</dt><dd>Scoped, expiring grants</dd></div>
+    <div><dt>Scale</dt><dd>Many Macs, one install each</dd></div>
+  </dl>
+
+  <hr class="rule">
+
+  <h2>Pick one starting shape</h2>
+  <p class="lead">All three expose the same verbs — <code>mount</code>, <code>unmount</code>,
+    <code>eject</code>, <code>doctor</code>, <code>grant</code>. They differ in where the
+    lock, the grants, and the audit live.</p>
+
+  <div class="options">
+
+    <!-- ══ OPTION A ══════════════════════════════════════════════════ -->
+    <article class="opt recommended">
+      <div class="opt-head">
+        <span class="opt-tag">Option A</span>
+        <span class="badge">Start here</span>
+      </div>
+      <h3>Toolbelt</h3>
+      <p class="thesis">One stdio MCP process per agent session. Everything lives in a
+        library: grants, lock, audit. No daemon, no ports, no lifecycle.</p>
+
+      <svg viewBox="0 0 360 300" role="img" aria-label="Option A: an MCP client talks to a
+        single-process ntfsmnt-mcp server, which calls a guarded core library, then sudo,
+        then ntfs-3g.">
+        <defs>
+          <marker id="a1" viewBox="0 0 7 7" refX="6" refY="3.5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="var(--c-muted)"/>
+          </marker>
+        </defs>
+
+        <line class="link" x1="180" y1="60" x2="180" y2="84" marker-end="url(#a1)"/>
+        <line class="link" x1="180" y1="140" x2="180" y2="168" marker-end="url(#a1)"/>
+        <line class="link" x1="180" y1="224" x2="180" y2="244" marker-end="url(#a1)"/>
+
+        <rect class="box-soft" x="40" y="12" width="280" height="48" rx="6"/>
+        <text class="tag" x="52" y="27">CLIENT</text>
+        <text class="name" x="180" y="42" text-anchor="middle">Any MCP client</text>
+        <text class="sub" x="180" y="56" text-anchor="middle">Claude · Cursor · CI</text>
+
+        <rect class="box-backend" x="40" y="84" width="280" height="56" rx="6"/>
+        <text class="tag" x="52" y="99">PROCESS</text>
+        <text class="name" x="180" y="114" text-anchor="middle">ntfsmnt-mcp</text>
+        <text class="sub" x="180" y="130" text-anchor="middle">stdio · one per session</text>
+
+        <rect class="box-focal" x="40" y="168" width="280" height="56" rx="6"/>
+        <text class="tag" x="52" y="183">LIBRARY</text>
+        <text class="name" x="180" y="198" text-anchor="middle">Guarded core</text>
+        <text class="sub" x="180" y="214" text-anchor="middle">grants · lock · audit</text>
+
+        <rect class="box-store" x="40" y="244" width="280" height="36" rx="6"/>
+        <text class="sub" x="180" y="266" text-anchor="middle">sudo → ntfs-3g → NTFS volume</text>
+
+        <text class="arrow-label" x="188" y="76">tools</text>
+        <text class="arrow-label" x="188" y="158">calls</text>
+      </svg>
+
+      <div class="scores">
+        <div class="score"><span>Time to first demo</span><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></div>
+        <div class="score"><span>Safety surface</span><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></div>
+        <div class="score"><span>Composability</span><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></div>
+        <div class="score"><span>Path to fleet</span><span class="dots"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></div>
+      </div>
+
+      <div class="hook"><b>Viral hook</b>One line: <code>uvx ntfsmnt[mcp]</code>. Works in any
+        client that already speaks MCP — no new app to trust.</div>
+    </article>
+
+    <!-- ══ OPTION B ══════════════════════════════════════════════════ -->
+    <article class="opt">
+      <div class="opt-head">
+        <span class="opt-tag">Option B</span>
+      </div>
+      <h3>Local hub</h3>
+      <p class="thesis">One privileged daemon owns the lock, grants, audit, and events.
+        MCP servers are thin adapters; the web UI and HTTP share the same hub.</p>
+
+      <svg viewBox="0 0 360 300" role="img" aria-label="Option B: three agents connect to
+        thin MCP adapters, which talk over a Unix socket to one ntfsmntd hub that owns the
+        lock, grants, audit, and events, then sudo and ntfs-3g.">
+        <defs>
+          <marker id="a2" viewBox="0 0 7 7" refX="6" refY="3.5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="var(--c-muted)"/>
+          </marker>
+        </defs>
+
+        <line class="link" x1="66" y1="52" x2="90" y2="84" marker-end="url(#a2)"/>
+        <line class="link" x1="180" y1="52" x2="180" y2="84" marker-end="url(#a2)"/>
+        <line class="link" x1="294" y1="52" x2="270" y2="84" marker-end="url(#a2)"/>
+        <line class="link" x1="180" y1="120" x2="180" y2="148" marker-end="url(#a2)"/>
+        <line class="link" x1="180" y1="220" x2="180" y2="240" marker-end="url(#a2)"/>
+
+        <rect class="box-soft" x="16" y="12" width="100" height="40" rx="6"/>
+        <text class="name" x="66" y="37" text-anchor="middle">Claude</text>
+        <rect class="box-soft" x="130" y="12" width="100" height="40" rx="6"/>
+        <text class="name" x="180" y="37" text-anchor="middle">Cursor</text>
+        <rect class="box-soft" x="244" y="12" width="100" height="40" rx="6"/>
+        <text class="name" x="294" y="37" text-anchor="middle">CI</text>
+
+        <rect class="box-backend" x="40" y="84" width="280" height="36" rx="6"/>
+        <text class="name" x="180" y="106" text-anchor="middle">Thin MCP adapters</text>
+
+        <rect class="box-focal" x="40" y="148" width="280" height="72" rx="6"/>
+        <text class="tag" x="52" y="163">DAEMON</text>
+        <text class="name" x="180" y="180" text-anchor="middle">ntfsmntd hub</text>
+        <text class="sub" x="180" y="196" text-anchor="middle">one lock · grants · audit</text>
+        <text class="sub-sm" x="180" y="210" text-anchor="middle">Unix socket · events · web UI</text>
+
+        <rect class="box-store" x="40" y="240" width="280" height="36" rx="6"/>
+        <text class="sub" x="180" y="262" text-anchor="middle">sudo → ntfs-3g → NTFS volume</text>
+
+        <text class="arrow-label" x="188" y="140">socket</text>
+      </svg>
+
+      <div class="scores">
+        <div class="score"><span>Time to first demo</span><span class="dots"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></div>
+        <div class="score"><span>Safety surface</span><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></div>
+        <div class="score"><span>Composability</span><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></div>
+        <div class="score"><span>Path to fleet</span><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></div>
+      </div>
+
+      <div class="hook"><b>Viral hook</b>One Mac, every agent, one audit trail. The demo is
+        “watch two agents share a disk safely.”</div>
+    </article>
+
+    <!-- ══ OPTION C ══════════════════════════════════════════════════ -->
+    <article class="opt">
+      <div class="opt-head">
+        <span class="opt-tag">Option C</span>
+      </div>
+      <h3>Capability mesh</h3>
+      <p class="thesis">A local gateway with namespaced capability packs: NTFS first, then
+        exFAT, disk images, rsync. Policy and routing live above the disk.</p>
+
+      <svg viewBox="0 0 360 300" role="img" aria-label="Option C: any agent calls a
+        capability gateway that routes to ntfs, exfat/apfs, and disk-image packs, which
+        reach host APIs.">
+        <defs>
+          <marker id="a3" viewBox="0 0 7 7" refX="6" refY="3.5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="var(--c-muted)"/>
+          </marker>
+        </defs>
+
+        <line class="link" x1="180" y1="52" x2="180" y2="80" marker-end="url(#a3)"/>
+        <line class="link" x1="100" y1="144" x2="100" y2="172" marker-end="url(#a3)"/>
+        <line class="link" x1="180" y1="144" x2="180" y2="172" marker-end="url(#a3)"/>
+        <line class="link" x1="260" y1="144" x2="260" y2="172" marker-end="url(#a3)"/>
+        <line class="link" x1="66" y1="220" x2="66" y2="244" marker-end="url(#a3)"/>
+        <line class="link" x1="180" y1="220" x2="180" y2="244" marker-end="url(#a3)"/>
+        <line class="link" x1="294" y1="220" x2="294" y2="244" marker-end="url(#a3)"/>
+
+        <rect class="box-soft" x="40" y="12" width="280" height="40" rx="6"/>
+        <text class="name" x="180" y="37" text-anchor="middle">Any agent / service</text>
+
+        <rect class="box-focal" x="40" y="80" width="280" height="64" rx="6"/>
+        <text class="tag" x="52" y="95">GATEWAY</text>
+        <text class="name" x="180" y="112" text-anchor="middle">Capability gateway</text>
+        <text class="sub" x="180" y="128" text-anchor="middle">manifest · policy · routing</text>
+
+        <rect class="box-backend" x="16" y="172" width="100" height="48" rx="6"/>
+        <text class="name" x="66" y="198" text-anchor="middle">ntfs</text>
+        <rect class="box-ext" x="130" y="172" width="100" height="48" rx="6"/>
+        <text class="name" x="180" y="198" text-anchor="middle">exfat</text>
+        <rect class="box-ext" x="244" y="172" width="100" height="48" rx="6"/>
+        <text class="name" x="294" y="196" text-anchor="middle">images</text>
+        <text class="sub-sm" x="294" y="209" text-anchor="middle">future</text>
+
+        <rect class="box-store" x="40" y="244" width="280" height="36" rx="6"/>
+        <text class="sub" x="180" y="266" text-anchor="middle">host APIs · FUSE · sudo</text>
+      </svg>
+
+      <div class="scores">
+        <div class="score"><span>Time to first demo</span><span class="dots"><i class="on"></i><i></i><i></i><i></i><i></i></span></div>
+        <div class="score"><span>Safety surface</span><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></div>
+        <div class="score"><span>Composability</span><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></div>
+        <div class="score"><span>Path to fleet</span><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></div>
+      </div>
+
+      <div class="hook"><b>Viral hook</b>“MCP-native disk capabilities.” A directory of packs
+        any agent can compose — but nobody installs a gateway to mount one drive.</div>
+    </article>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <caption style="text-align:left;font-family:var(--c-font-mono);font-size:0.58rem;letter-spacing:0.13em;text-transform:uppercase;color:var(--c-soft);padding-bottom:10px">Trade-offs</caption>
+      <thead>
+        <tr>
+          <th>Dimension</th>
+          <th class="rec">A · Toolbelt</th>
+          <th>B · Local hub</th>
+          <th>C · Mesh</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Install</td>
+          <td class="rec"><code>uvx ntfsmnt[mcp]</code> or <code>npx</code></td>
+          <td>Homebrew + app + daemon</td>
+          <td>gateway + packs</td>
+        </tr>
+        <tr>
+          <td>Root boundary</td>
+          <td class="rec">per session, narrow sudo rule</td>
+          <td>one long-lived root daemon</td>
+          <td>one gateway, many packs</td>
+        </tr>
+        <tr>
+          <td>Concurrent agents</td>
+          <td class="rec">file lock, best effort</td>
+          <td>single in-process lock</td>
+          <td>routed by gateway</td>
+        </tr>
+        <tr>
+          <td>Grants + audit</td>
+          <td class="rec">JSONL + grants file</td>
+          <td>hub-owned, queryable</td>
+          <td>policy engine</td>
+        </tr>
+        <tr>
+          <td>Upgrade path</td>
+          <td class="rec">promote library into B</td>
+          <td>add remote transport</td>
+          <td>add packs</td>
+        </tr>
+        <tr>
+          <td>Main risk</td>
+          <td class="rec">N sudo prompts, N processes</td>
+          <td>install friction kills virality</td>
+          <td>abstraction before demand</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 style="margin-top:32px">The wedge, then the upgrade</h2>
+  <p class="lead">Ship A. Move the lock, grants, and audit into a library on day one so B
+    is a packaging change, not a rewrite. Ignore C until a second capability is real.</p>
+
+  <div class="path">
+    <div class="step">
+      <div class="num">Now</div>
+      <h4>A — Toolbelt ships</h4>
+      <p>Stdio MCP with action tools, scoped grants, JSONL audit, bundled agent skill.</p>
+      <div class="when">2–3 weeks · one Mac · one line install</div>
+    </div>
+    <div class="step">
+      <div class="num">When two agents share a Mac</div>
+      <h4>B — promote to hub</h4>
+      <p>Same tool contract; core becomes a Unix-socket daemon. Web UI and HTTP join it.</p>
+      <div class="when">no API break · safety rules move, not change</div>
+    </div>
+    <div class="step">
+      <div class="num">When a second capability is real</div>
+      <h4>C — gateway, not before</h4>
+      <p>Namespaced packs and policy. Only worth it if exFAT/images/rsync have users.</p>
+      <div class="when">earned, not assumed</div>
+    </div>
+  </div>
+
+  <div class="note"><strong>Recommendation:</strong> build A, but put the grant, lock, and
+    audit logic in <code>ntfsmnt/</code> — not in the MCP adapter. The adapter should be
+    disposable. That single boundary is what makes B cheap and C possible without
+    rewriting the safety model.</div>
+
+  <div class="viral">
+    <div>
+      <h3>What makes it spread</h3>
+      <ul>
+        <li><strong>One-line install</strong> — <code>uvx ntfsmnt[mcp]</code>; no daemon, no app, no account.</li>
+        <li><strong>Directory-first launch</strong> — MCP registry, Smithery, awesome-mcp lists, one canonical <code>server.json</code>.</li>
+        <li><strong>30-second video</strong> — “Claude, mount this drive and copy the footage,” with the grant card on screen.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Proof people can share</h3>
+      <ul>
+        <li><strong>Signed operation receipt</strong> — a small shareable card: volume, bytes copied, grant used, zero repair tools.</li>
+        <li><strong>Zero-hardware demo</strong> — <code>ntfsmnt demo</code> attaches a bundled NTFS image, so the hero demo runs anywhere.</li>
+        <li><strong>Agent-readable manifest</strong> — <code>llms.txt</code> + tool descriptions written for models, not just humans.</li>
+      </ul>
+    </div>
+  </div>
+
+  <footer>
+    ntfsmnt · agent options · 2026-11-03 · palette from site/styles.css ·
+    same verbs in every shape: mount · unmount · eject · doctor · grant
+  </footer>
+
+</div>
+</body>
+</html>

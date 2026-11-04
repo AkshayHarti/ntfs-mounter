@@ -19,6 +19,9 @@ class Settings:
     cookie_name: str = "ntfsmnt_session"
     agent_llm: str | None = None
     agent_model: str = "gpt-4o-mini"
+    agent_token: str | None = None
+    mcp_session: bool = False
+    exit_on_stdin_eof: bool = False
 
 
 def _parse_owner(text: str) -> tuple[int, int]:
@@ -48,6 +51,8 @@ def settings_from(
     open_browser: bool = False,
     agent_llm: str | None = None,
     agent_model: str = "gpt-4o-mini",
+    mcp_session: bool = False,
+    exit_on_stdin_eof: bool = False,
 ) -> Settings:
     resolved = _parse_owner(owner) if owner is not None else _env_owner(environ)
     root = euid == 0
@@ -60,6 +65,11 @@ def settings_from(
         open_browser=open_browser,
         agent_llm=agent_llm or None,
         agent_model=agent_model,
+        # Never derive this from the human token: an agent token must not open
+        # the dashboard, and a leaked session cookie must not act as an agent.
+        agent_token=secrets.token_urlsafe(32) if mcp_session else None,
+        mcp_session=mcp_session,
+        exit_on_stdin_eof=exit_on_stdin_eof,
     )
 
 

@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<title>ntfsmnt — built, operated, measured</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* ── Tokens: lifted from site/styles.css ─────────────────────────── */
+  :root {
+    --c-paper:       #fbfaf7;
+    --c-paper-2:     #f2efe9;
+    --c-node:        #ffffff;
+    --c-node-2:      #f7f4ee;
+    --c-ink:         #1c1b19;
+    --c-muted:       #605e57;
+    --c-soft:        #767065;
+    --c-rule:        #e2ded6;
+    --c-rule-strong: #c9c3b8;
+    --c-accent:      #a4471b;
+    --c-accent-2:    rgba(164, 71, 27, 0.08);
+    --c-store:       rgba(28, 27, 25, 0.05);
+    --c-ext:         rgba(28, 27, 25, 0.03);
+    --c-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   Helvetica, Arial, sans-serif;
+    --c-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+                   "Liberation Mono", monospace;
+    --c-font-serif: Georgia, "Times New Roman", serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --c-paper:       #131312;
+      --c-paper-2:     #1c1b19;
+      --c-node:        #201f1d;
+      --c-node-2:      #26241f;
+      --c-ink:         #e9e6df;
+      --c-muted:       #a3a099;
+      --c-soft:        #8a857c;
+      --c-rule:        #2b2a27;
+      --c-rule-strong: #3d3a35;
+      --c-accent:      #e3a373;
+      --c-accent-2:    rgba(227, 163, 115, 0.10);
+      --c-store:       rgba(233, 230, 223, 0.05);
+      --c-ext:         rgba(233, 230, 223, 0.03);
+    }
+  }
+
+  body {
+    background: var(--c-paper);
+    color: var(--c-ink);
+    font-family: var(--c-font-sans);
+    font-size: 16px;
+    line-height: 1.6;
+    font-kerning: normal;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page { max-width: 1180px; margin: 0 auto; padding: 56px 32px 72px; }
+
+  /* ── Header ─────────────────────────────────────────────────────── */
+  .eyebrow {
+    font-family: var(--c-font-mono);
+    font-size: 0.63rem;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--c-soft);
+  }
+
+  h1 {
+    margin-top: 14px;
+    font-size: clamp(2rem, 4.2vw, 2.9rem);
+    font-weight: 600;
+    line-height: 1.08;
+    letter-spacing: -0.025em;
+    max-width: 22ch;
+  }
+
+  .dek {
+    margin-top: 18px;
+    max-width: 70ch;
+    font-size: 1.06rem;
+    color: var(--c-muted);
+  }
+
+  .rule { height: 1px; background: var(--c-rule); border: 0; margin: 40px 0; }
+
+  /* ── Sections ───────────────────────────────────────────────────── */
+  section { margin-top: 48px; }
+
+  .section-head { margin-bottom: 20px; }
+
+  h2 {
+    margin-top: 8px;
+    font-size: 1.5rem;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    line-height: 1.2;
+  }
+
+  .lead {
+    margin-top: 8px;
+    max-width: 78ch;
+    font-size: 0.95rem;
+    color: var(--c-muted);
+  }
+
+  /* ── Figure container ───────────────────────────────────────────── */
+  .figure {
+    margin-top: 20px;
+    border: 1px solid var(--c-rule);
+    border-radius: 8px;
+    background: var(--c-paper-2);
+    padding: 20px 20px 12px;
+    overflow-x: auto;
+  }
+
+  .figure svg { display: block; width: 100%; height: auto; min-width: 720px; }
+
+  .figure figcaption {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--c-rule);
+    font-family: var(--c-font-mono);
+    font-size: 0.63rem;
+    letter-spacing: 0.04em;
+    color: var(--c-soft);
+    line-height: 1.6;
+  }
+
+  /* ── SVG type ───────────────────────────────────────────────────── */
+  svg text { font-family: var(--c-font-sans); }
+  .tag {
+    font-family: var(--c-font-mono);
+    font-size: 7px;
+    letter-spacing: 0.14em;
+    fill: var(--c-soft);
+  }
+  .name { font-size: 12px; font-weight: 600; fill: var(--c-ink); }
+  .name-lg { font-size: 13.5px; font-weight: 600; fill: var(--c-ink); }
+  .sub {
+    font-family: var(--c-font-mono);
+    font-size: 9px;
+    fill: var(--c-muted);
+  }
+  .sub-sm { font-family: var(--c-font-mono); font-size: 8px; fill: var(--c-soft); }
+  .arrow-label {
+    font-family: var(--c-font-mono);
+    font-size: 8px;
+    letter-spacing: 0.06em;
+    fill: var(--c-muted);
+  }
+  .annotation {
+    font-family: var(--c-font-serif);
+    font-style: italic;
+    font-size: 13px;
+    fill: var(--c-muted);
+  }
+  .axis {
+    font-family: var(--c-font-mono);
+    font-size: 8px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    fill: var(--c-soft);
+  }
+  .layer-name { font-size: 12px; font-weight: 600; fill: var(--c-ink); }
+
+  /* ── SVG node treatments ────────────────────────────────────────── */
+  .box-backend { fill: var(--c-node); stroke: var(--c-ink); stroke-width: 1; }
+  .box-soft    { fill: var(--c-node); stroke: var(--c-rule-strong); stroke-width: 1; }
+  .box-store   { fill: var(--c-store); stroke: var(--c-muted); stroke-width: 1; }
+  .box-ext     { fill: var(--c-ext); stroke: var(--c-soft); stroke-width: 1; }
+  .box-focal   { fill: var(--c-accent-2); stroke: var(--c-accent); stroke-width: 1.2; }
+  .box-sec     { fill: var(--c-accent-2); stroke: var(--c-accent);
+                 stroke-width: 1; stroke-dasharray: 4 4; }
+  .layer       { fill: var(--c-node); stroke: var(--c-rule-strong); stroke-width: 1; }
+  .layer-apex  { fill: var(--c-accent-2); stroke: var(--c-accent); stroke-width: 1.2; }
+
+  .link        { fill: none; stroke: var(--c-muted); stroke-width: 1; }
+  .link-dash   { fill: none; stroke: var(--c-muted); stroke-width: 1;
+                 stroke-dasharray: 5 4; }
+  .leader      { fill: none; stroke: var(--c-soft); stroke-width: 1;
+                 stroke-dasharray: 3 3; }
+  .mask        { fill: var(--c-paper-2); }
+  .dot         { fill: var(--c-ink); }
+
+  /* ── Cards ──────────────────────────────────────────────────────── */
+  .cards {
+    margin-top: 20px;
+    display: grid;
+    grid-template-columns: 1.35fr 0.9fr;
+    gap: 1px;
+    background: var(--c-rule);
+    border: 1px solid var(--c-rule);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .card { background: var(--c-paper); padding: 20px 22px; }
+  .card h3 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    margin-bottom: 10px;
+  }
+  .card p, .card li { font-size: 0.88rem; color: var(--c-muted); }
+  .card ul { list-style: none; margin-top: 8px; }
+  .card li {
+    padding: 5px 0;
+    border-top: 1px solid var(--c-rule);
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .card li code, .mono {
+    font-family: var(--c-font-mono);
+    font-size: 0.78rem;
+    color: var(--c-ink);
+  }
+  .card li span:last-child { text-align: right; }
+
+  /* ── Stats ──────────────────────────────────────────────────────── */
+  .stats {
+    margin-top: 20px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    border: 1px solid var(--c-rule);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--c-rule);
+    gap: 1px;
+  }
+  .stat { background: var(--c-paper); padding: 16px 18px; }
+  .stat b {
+    display: block;
+    font-size: 1.8rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+  }
+  .stat span {
+    display: block;
+    margin-top: 4px;
+    font-family: var(--c-font-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--c-soft);
+  }
+
+  /* ── Table ──────────────────────────────────────────────────────── */
+  .table-wrap { margin-top: 20px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+  caption {
+    text-align: left;
+    font-family: var(--c-font-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--c-soft);
+    padding-bottom: 10px;
+  }
+  th {
+    text-align: left;
+    font-family: var(--c-font-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--c-soft);
+    border-bottom: 1px solid var(--c-rule-strong);
+    padding: 8px 12px;
+    white-space: nowrap;
+  }
+  td {
+    padding: 11px 12px;
+    border-bottom: 1px solid var(--c-rule);
+    vertical-align: top;
+    color: var(--c-muted);
+  }
+  td:first-child { color: var(--c-ink); }
+  td code {
+    font-family: var(--c-font-mono);
+    font-size: 0.78rem;
+    color: var(--c-ink);
+    background: var(--c-paper-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  tr.open td:first-child::after {
+    content: "open";
+    margin-left: 8px;
+    font-family: var(--c-font-mono);
+    font-size: 0.55rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--c-accent);
+    border: 1px solid var(--c-accent);
+    border-radius: 3px;
+    padding: 1px 4px;
+    vertical-align: 1px;
+  }
+
+  .note {
+    margin-top: 18px;
+    padding: 14px 18px;
+    border-left: 2px solid var(--c-accent);
+    background: var(--c-accent-2);
+    font-size: 0.87rem;
+    color: var(--c-muted);
+  }
+  .note strong { color: var(--c-ink); font-weight: 600; }
+
+  footer {
+    margin-top: 56px;
+    padding-top: 18px;
+    border-top: 1px solid var(--c-rule);
+    font-family: var(--c-font-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.04em;
+    color: var(--c-soft);
+    line-height: 1.8;
+  }
+
+  @media (max-width: 760px) {
+    .page { padding: 36px 18px 56px; }
+    .cards { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <div class="eyebrow">ntfsmnt · system note · 2026-11-03</div>
+    <h1>What is built, how to run it, and how to know it works</h1>
+    <p class="dek">A read-write NTFS stack for macOS, wrapped around one guarded core:
+      eight CLI commands, a root-run dashboard, an agentic surface, a grant-scoped MCP
+      server, and a menu-bar app. 534 tests, four distribution channels, and exactly
+      one step that still needs a real disk.</p>
+  </header>
+
+  <hr class="rule">
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       01 · WHAT HAS BEEN BUILT
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <div class="section-head">
+      <div class="eyebrow">01 · what has been built</div>
+      <h2>Four surfaces, one guarded core</h2>
+      <p class="lead">Every surface funnels through the same orchestration module, so a
+        generated button, an MCP client, or a menu-bar click cannot reach a disk without
+        passing the same guards.</p>
+    </div>
+
+    <figure class="figure">
+      <svg viewBox="0 0 1080 528" role="img" aria-labelledby="fig1-title">
+        <title id="fig1-title">ntfsmnt architecture: four surfaces feed one orchestration
+          core, which crosses a sudo privilege boundary into the FUSE-T-linked ntfs-3g,
+          which serves the NTFS volume. The core also reads macOS diskutil state.</title>
+
+        <defs>
+          <marker id="ah" viewBox="0 0 7 7" refX="6" refY="3.5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="var(--c-muted)"/>
+          </marker>
+          <marker id="ah-accent" viewBox="0 0 7 7" refX="6" refY="3.5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="var(--c-accent)"/>
+          </marker>
+        </defs>
+
+        <!-- arrows first: they paint behind the boxes -->
+        <!-- surface → core -->
+        <line class="link" x1="140" y1="116" x2="300" y2="212" marker-end="url(#ah)"/>
+        <line class="link-dash" x1="360" y1="116" x2="400" y2="212" marker-end="url(#ah)"/>
+        <line class="link" x1="602" y1="116" x2="602" y2="212" marker-end="url(#ah)"/>
+        <!-- app starts the web server -->
+        <line class="link-dash" x1="776" y1="82" x2="724" y2="82" marker-end="url(#ah)"/>
+        <!-- core → privileged path -->
+        <line class="link" x1="388" y1="304" x2="388" y2="384" marker-end="url(#ah)"/>
+        <line class="link" x1="496" y1="420" x2="560" y2="420" marker-end="url(#ah)"/>
+        <line class="link" x1="800" y1="420" x2="860" y2="420" marker-end="url(#ah)"/>
+        <!-- core reads macOS state -->
+        <path class="link-dash"
+              d="M 300 304 L 300 340 Q 300 348 292 348 L 138 348 Q 130 348 130 356 L 130 384"
+              marker-end="url(#ah)"/>
+
+        <!-- arrow labels, each on a paper mask -->
+        <rect class="mask" x="424" y="160" width="62" height="12" rx="2"/>
+        <text class="arrow-label" x="428" y="169">read-only</text>
+
+        <rect class="mask" x="606" y="160" width="88" height="12" rx="2"/>
+        <text class="arrow-label" x="612" y="169">state · actions</text>
+
+        <rect class="mask" x="734" y="66" width="42" height="12" rx="2"/>
+        <text class="arrow-label" x="738" y="75">starts</text>
+
+        <rect class="mask" x="394" y="336" width="66" height="12" rx="2"/>
+        <text class="arrow-label" x="398" y="345">mutations</text>
+
+        <rect class="mask" x="518" y="404" width="30" height="12" rx="2"/>
+        <text class="arrow-label" x="522" y="413">exec</text>
+
+        <rect class="mask" x="818" y="404" width="46" height="12" rx="2"/>
+        <text class="arrow-label" x="822" y="413">FUSE-T</text>
+
+        <rect class="mask" x="192" y="334" width="42" height="12" rx="2"/>
+        <text class="arrow-label" x="196" y="343">reads</text>
+
+        <!-- row 1: surfaces -->
+        <g>
+          <rect class="box-soft" x="40" y="48" width="200" height="68" rx="6"/>
+          <text class="tag" x="52" y="64">CLI</text>
+          <text class="name" x="140" y="88" text-anchor="middle">ntfsmnt</text>
+          <text class="sub" x="140" y="104" text-anchor="middle">8 commands</text>
+        </g>
+        <g>
+          <rect class="box-ext" x="272" y="48" width="176" height="68" rx="6"/>
+          <text class="tag" x="284" y="64">STDIO</text>
+          <text class="name" x="360" y="88" text-anchor="middle">MCP server</text>
+          <text class="sub" x="360" y="104" text-anchor="middle">3 read-only tools</text>
+        </g>
+        <g>
+          <rect class="box-backend" x="480" y="48" width="244" height="68" rx="6"/>
+          <text class="tag" x="492" y="64">HTTP · SSE</text>
+          <text class="name" x="602" y="88" text-anchor="middle">Web dashboard</text>
+          <text class="sub" x="602" y="104" text-anchor="middle">/ agent · /classic</text>
+        </g>
+        <g>
+          <rect class="box-ext" x="776" y="48" width="264" height="68" rx="6"/>
+          <text class="tag" x="788" y="64">SWIFT</text>
+          <text class="name" x="908" y="88" text-anchor="middle">Menu-bar app</text>
+          <text class="sub" x="908" y="104" text-anchor="middle">starts · stops · reopens</text>
+        </g>
+
+        <!-- row 2: core -->
+        <g>
+          <rect class="box-focal" x="240" y="212" width="600" height="92" rx="6"/>
+          <text class="tag" x="252" y="230">CORE</text>
+          <text class="name-lg" x="540" y="258" text-anchor="middle">Orchestration core</text>
+          <text class="sub" x="540" y="276" text-anchor="middle">volumes · mounter · unmounter · doctor · options</text>
+          <text class="sub-sm" x="540" y="292" text-anchor="middle">one operation at a time · never guesses a volume</text>
+        </g>
+
+        <!-- row 3: system -->
+        <g>
+          <rect class="box-store" x="40" y="384" width="180" height="72" rx="6"/>
+          <text class="tag" x="52" y="400">STATE</text>
+          <text class="name" x="130" y="424" text-anchor="middle">macOS state</text>
+          <text class="sub" x="130" y="440" text-anchor="middle">diskutil · mount</text>
+        </g>
+        <g>
+          <rect class="box-sec" x="280" y="384" width="216" height="72" rx="6"/>
+          <text class="tag" x="292" y="400">SECURITY</text>
+          <text class="name" x="388" y="424" text-anchor="middle">Privilege boundary</text>
+          <text class="sub" x="388" y="440" text-anchor="middle">sudo re-exec · no osascript</text>
+        </g>
+        <g>
+          <rect class="box-ext" x="560" y="384" width="240" height="72" rx="6"/>
+          <text class="tag" x="572" y="400">EXTERNAL</text>
+          <text class="name" x="680" y="424" text-anchor="middle">FUSE-T + ntfs-3g</text>
+          <text class="sub" x="680" y="440" text-anchor="middle">/usr/local/bin/ntfs-3g</text>
+        </g>
+        <g>
+          <rect class="box-store" x="860" y="384" width="180" height="72" rx="6"/>
+          <text class="tag" x="872" y="400">STORE</text>
+          <text class="name" x="950" y="424" text-anchor="middle">NTFS volume</text>
+          <text class="sub" x="950" y="440" text-anchor="middle">rw · /Volumes/&lt;label&gt;</text>
+        </g>
+
+        <!-- legend, outside the diagram field -->
+        <line class="link" x1="40" y1="500" x2="76" y2="500" marker-end="url(#ah)"/>
+        <text class="arrow-label" x="84" y="503">write path</text>
+
+        <line class="link-dash" x1="188" y1="500" x2="224" y2="500" marker-end="url(#ah)"/>
+        <text class="arrow-label" x="232" y="503">read-only observation</text>
+
+        <rect class="box-focal" x="392" y="490" width="26" height="14" rx="4"/>
+        <text class="arrow-label" x="428" y="503">orchestration core</text>
+
+        <rect class="box-sec" x="588" y="490" width="26" height="14" rx="4"/>
+        <text class="arrow-label" x="624" y="503">privilege boundary</text>
+      </svg>
+      <figcaption>Solid = write path. Dashed = read-only observation. The privileged node is
+        the only place root is requested, and only mount, unmount, and eject cross it.</figcaption>
+    </figure>
+
+    <div class="cards">
+      <div class="card">
+        <h3>Shipped</h3>
+        <ul>
+          <li><span>Read-write mount, unmount, eject, doctor, status, list</span><code>v0.1.0</code></li>
+          <li><span>Agent dashboard at <code>/</code>; classic page at <code>/classic</code></span><code>OpenUI + AG-UI</code></li>
+          <li><span>MCP server, read-only by design</span><code>3 tools</code></li>
+          <li><span>Unsigned menu-bar app + signing scripts</span><code>Swift</code></li>
+          <li><span>Channels: PyPI, Homebrew tap, GitHub Pages</span><code>npm pending</code></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Guard rails</h3>
+        <p>Ten core invariants, seven web invariants, six privileged-install invariants —
+          all encoded in tests, not just prose.</p>
+        <ul>
+          <li><span>Privilege escalation paths</span><code>1</code></li>
+          <li><span>Auto-repair tools called</span><code>0</code></li>
+          <li><span><code>SIGKILL</code> sent to disk processes</span><code>0</code></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       02 · HOW TO OPERATE
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <div class="section-head">
+      <div class="eyebrow">02 · how to operate</div>
+      <h2>One path, four ways in</h2>
+      <p class="lead">Install once, verify the host, then mount → write → unmount. The
+        CLI, the dashboard, the agent, and the menu bar all run these same steps through
+        the core.</p>
+    </div>
+
+    <figure class="figure">
+      <svg viewBox="0 0 1080 880" role="img" aria-labelledby="fig2-title">
+        <title id="fig2-title">Operating flowchart: install prerequisites, run doctor,
+          choose a volume, then a decision on hibernation, dirty state, or BitLocker.
+          Refused volumes stop with an explanation; healthy volumes mount, accept writes,
+          unmount, and optionally eject.</title>
+
+        <defs>
+          <marker id="ah2" viewBox="0 0 7 7" refX="6" refY="3.5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="var(--c-muted)"/>
+          </marker>
+        </defs>
+
+        <!-- arrows -->
+        <line class="link" x1="520" y1="92" x2="520" y2="124" marker-end="url(#ah2)"/>
+        <line class="link" x1="520" y1="192" x2="520" y2="224" marker-end="url(#ah2)"/>
+        <line class="link" x1="520" y1="292" x2="520" y2="312" marker-end="url(#ah2)"/>
+        <line class="link" x1="520" y1="440" x2="520" y2="472" marker-end="url(#ah2)"/>
+        <line class="link" x1="520" y1="540" x2="520" y2="572" marker-end="url(#ah2)"/>
+        <line class="link" x1="520" y1="640" x2="520" y2="672" marker-end="url(#ah2)"/>
+        <line class="link" x1="520" y1="740" x2="520" y2="772" marker-end="url(#ah2)"/>
+        <line class="link" x1="676" y1="376" x2="800" y2="376" marker-end="url(#ah2)"/>
+
+        <!-- branch labels -->
+        <rect class="mask" x="528" y="448" width="22" height="12" rx="2"/>
+        <text class="arrow-label" x="532" y="457">no</text>
+
+        <rect class="mask" x="726" y="360" width="26" height="12" rx="2"/>
+        <text class="arrow-label" x="730" y="369">yes</text>
+
+        <!-- steps -->
+        <rect class="box-soft" x="360" y="32" width="320" height="60" rx="30"/>
+        <text class="name" x="520" y="58" text-anchor="middle">Install prerequisites</text>
+        <text class="sub" x="520" y="74" text-anchor="middle">scripts/setup.sh · FUSE-T + ntfs-3g</text>
+
+        <rect class="box-backend" x="360" y="124" width="320" height="68" rx="6"/>
+        <text class="tag" x="372" y="140">CHECK</text>
+        <text class="name" x="520" y="162" text-anchor="middle">Verify the host</text>
+        <text class="sub" x="520" y="178" text-anchor="middle">ntfsmnt doctor · root + Full Disk Access</text>
+
+        <rect class="box-backend" x="360" y="224" width="320" height="68" rx="6"/>
+        <text class="tag" x="372" y="240">CHOOSE</text>
+        <text class="name" x="520" y="262" text-anchor="middle">Pick one volume</text>
+        <text class="sub" x="520" y="278" text-anchor="middle">label · UUID · device</text>
+
+        <polygon class="box-backend" points="520,312 676,376 520,440 364,376"/>
+        <text class="name" x="520" y="364" text-anchor="middle">Hibernated, dirty,</text>
+        <text class="name" x="520" y="382" text-anchor="middle">or BitLocker?</text>
+        <text class="sub-sm" x="520" y="398" text-anchor="middle">refused by default</text>
+
+        <rect class="box-soft" x="800" y="344" width="240" height="76" rx="6"/>
+        <text class="tag" x="812" y="360">STOP</text>
+        <text class="name" x="920" y="380" text-anchor="middle">Explain, don't repair</text>
+        <text class="sub" x="920" y="396" text-anchor="middle">--recover / --remove-hiberfile</text>
+        <text class="sub-sm" x="920" y="410" text-anchor="middle">opt-in only</text>
+
+        <rect class="box-focal" x="360" y="472" width="320" height="68" rx="6"/>
+        <text class="tag" x="372" y="488">MOUNT</text>
+        <text class="name" x="520" y="510" text-anchor="middle">Mount read-write</text>
+        <text class="sub" x="520" y="526" text-anchor="middle">ntfsmnt mount HD1 · write probe</text>
+
+        <rect class="box-backend" x="360" y="572" width="320" height="68" rx="6"/>
+        <text class="tag" x="372" y="588">WORK</text>
+        <text class="name" x="520" y="610" text-anchor="middle">Use the volume</text>
+        <text class="sub" x="520" y="626" text-anchor="middle">ordinary writes · no sudo</text>
+
+        <rect class="box-backend" x="360" y="672" width="320" height="68" rx="6"/>
+        <text class="tag" x="372" y="688">UNMOUNT</text>
+        <text class="name" x="520" y="710" text-anchor="middle">Unmount safely</text>
+        <text class="sub" x="520" y="726" text-anchor="middle">ntfsmnt unmount · SIGTERM once</text>
+
+        <rect class="box-soft" x="360" y="772" width="320" height="60" rx="30"/>
+        <text class="name" x="520" y="798" text-anchor="middle">Optional: eject</text>
+        <text class="sub" x="520" y="814" text-anchor="middle">ntfsmnt eject</text>
+
+        <!-- editorial callouts: serif italic, dashed leader -->
+        <text class="annotation" x="56" y="508">Every surface runs this one path;</text>
+        <text class="annotation" x="56" y="528">none of them can bypass a guard.</text>
+        <path class="leader" d="M 304 516 Q 330 512 354 506"/>
+        <circle class="dot" cx="358" cy="505" r="2"/>
+
+        <text class="annotation" x="800" y="462">no ntfsfix, no ntfsresize, no ntfswipe</text>
+        <path class="leader" d="M 920 442 L 920 424"/>
+        <circle class="dot" cx="920" cy="421" r="2"/>
+      </svg>
+      <figcaption>Both pages and the agent call the same routes; the CLI calls the same core.
+        The only difference between surfaces is who authenticates the request.</figcaption>
+    </figure>
+
+    <div class="cards">
+      <div class="card">
+        <h3>Commands</h3>
+        <ul>
+          <li><span>Check the host</span><code>ntfsmnt doctor</code></li>
+          <li><span>List volumes and state</span><code>ntfsmnt list</code></li>
+          <li><span>Mount read-write</span><code>sudo ntfsmnt mount HD1</code></li>
+          <li><span>Unmount (busy → SIGTERM once)</span><code>sudo ntfsmnt unmount HD1</code></li>
+          <li><span>Open the dashboard</span><code>sudo ntfsmnt web</code></li>
+          <li><span>Read-only MCP over stdio</span><code>ntfsmnt mcp</code></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>What root may do</h3>
+        <p>Root is requested through one <code>sudo</code> re-exec. The optional
+          privileged install grants a <code>NOPASSWD</code> rule for <code>web</code> only —
+          mount, unmount, and eject run inside the already-root server.</p>
+        <p style="margin-top:10px">No <code>osascript</code>, so the terminal keeps its
+          Full Disk Access attribution.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       03 · HOW TO MEASURE
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <div class="section-head">
+      <div class="eyebrow">03 · how to measure</div>
+      <h2>Evidence, from cheap to decisive</h2>
+      <p class="lead">The suite never touches <code>/Volumes</code>: subprocesses, the mount
+        table, sleeps, and the write probe are injected. The only rung that needs real
+        hardware is the last one.</p>
+    </div>
+
+    <figure class="figure">
+      <svg viewBox="0 0 1080 432" role="img" aria-labelledby="fig3-title">
+        <title id="fig3-title">A five-layer evidence pyramid, widest at the base: unit and
+          injected-runner tests, the web and agent boundary, CI gates, packaging channels,
+          and the narrow apex of real-disk acceptance, which is still pending.</title>
+
+        <!-- axis -->
+        <text class="axis" x="96" y="54" text-anchor="middle">rarer</text>
+        <line class="leader" x1="96" y1="64" x2="96" y2="392"/>
+        <text class="axis" x="96" y="408" text-anchor="middle">cheaper</text>
+
+        <!-- layers, base → apex -->
+        <polygon class="layer" points="150,384 930,384 860,320 220,320"/>
+        <text class="layer-name" x="540" y="348" text-anchor="middle">Unit + injected runners</text>
+        <text class="sub" x="540" y="364" text-anchor="middle">407 cases · no hardware</text>
+
+        <polygon class="layer" points="220,320 860,320 800,256 280,256"/>
+        <text class="layer-name" x="540" y="284" text-anchor="middle">Web + agent boundary</text>
+        <text class="sub" x="540" y="300" text-anchor="middle">47 cases · token · Origin · lock</text>
+
+        <polygon class="layer" points="280,256 800,256 740,192 340,192"/>
+        <text class="layer-name" x="540" y="220" text-anchor="middle">CI gates</text>
+        <text class="sub" x="540" y="236" text-anchor="middle">test + build on every PR</text>
+
+        <polygon class="layer" points="340,192 740,192 680,128 400,128"/>
+        <text class="layer-name" x="540" y="156" text-anchor="middle">Packaging channels</text>
+        <text class="sub" x="540" y="172" text-anchor="middle">uv build · npm 9 · brew audit</text>
+
+        <polygon class="layer-apex" points="400,128 680,128 620,64 460,64"/>
+        <text class="layer-name" x="540" y="92" text-anchor="middle">Real-disk acceptance</text>
+        <text class="sub" x="540" y="110" text-anchor="middle">root · FDA · NTFS hardware</text>
+      </svg>
+      <figcaption>Widths encode how often each rung runs, not pass rates. The apex has run
+        zero times on this machine — no bare-block NTFS hardware was attached.</figcaption>
+    </figure>
+
+    <div class="stats">
+      <div class="stat"><b>407</b><span>pytest cases</span></div>
+      <div class="stat"><b>47</b><span>web · API · JS</span></div>
+      <div class="stat"><b>9</b><span>npm proxy tests</span></div>
+      <div class="stat"><b>0</b><span>real-disk runs</span></div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <caption>Signals and their green thresholds</caption>
+        <thead>
+          <tr><th>Signal</th><th>How to take it</th><th>Green means</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Unit + integration</td>
+            <td><code>uv run pytest -q</code></td>
+            <td>407 passed; no subprocess touches a real disk</td>
+          </tr>
+          <tr>
+            <td>Web + agent boundary</td>
+            <td><code>uv sync --extra web</code> + tests</td>
+            <td>47 cases cover token, Origin, host guard, lock, SSE</td>
+          </tr>
+          <tr>
+            <td>npm proxy</td>
+            <td><code>npm test --prefix npm</code></td>
+            <td>9 passed; resolution, recursion guard, signals</td>
+          </tr>
+          <tr>
+            <td>CI</td>
+            <td><code>gh pr checks &lt;number&gt;</code></td>
+            <td><code>test</code> and <code>build</code> both pass</td>
+          </tr>
+          <tr>
+            <td>Packaging</td>
+            <td><code>uv build</code> · <code>brew audit --strict</code></td>
+            <td>wheel + sdist; both formulae audit clean</td>
+          </tr>
+          <tr>
+            <td>Runtime host</td>
+            <td><code>ntfsmnt doctor</code></td>
+            <td>fuse-t · ntfs-3g · root · device-access all green</td>
+          </tr>
+          <tr>
+            <td>Safety invariants</td>
+            <td>the suite itself</td>
+            <td>no <code>osascript</code>, no repair tools, no <code>kill -9</code></td>
+          </tr>
+          <tr class="open">
+            <td>Real-disk acceptance</td>
+            <td><code>tests/manual/acceptance.md</code></td>
+            <td>mount, write, unmount, eject on an actual NTFS volume</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="note"><strong>Still open:</strong> npm publish (trusted publisher not
+      configured), a tagged release past <code>v0.1.0</code>, Developer ID signing and
+      notarization, and the real-disk acceptance run. Everything above those is green.</p>
+  </section>
+
+  <footer>
+    Source: repos/ntfs-mounter @ 78be2b2 · palette and type from site/styles.css ·
+    self-contained, no external requests · 2026-11-03
+  </footer>
+
+</div>
+</body>
+</html>

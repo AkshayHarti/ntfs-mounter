@@ -206,8 +206,21 @@ def _build_parser() -> argparse.ArgumentParser:
                           "(e.g. http://127.0.0.1:11434 for Ollama)")
     web.add_argument("--agent-model", default="gpt-4o-mini", metavar="MODEL",
                      help="model name used with --agent-llm")
+    web.add_argument("--mcp-session", action="store_true",
+                     help="spawned by `ntfsmnt mcp`; print a JSON handshake")
+    web.add_argument("--exit-on-stdin-eof", action="store_true",
+                     help="stop when the parent closes stdin")
 
-    sub.add_parser("mcp", help="read-only MCP server on stdio (list, status, doctor)")
+    mcp = sub.add_parser("mcp", help="MCP server on stdio (read + grant-scoped actions)")
+    mcp.add_argument("--approve", choices=("browser", "touchid"), default="browser",
+                     help="how a human approves a grant (default: browser)")
+    mcp.add_argument("--no-browser", action="store_true",
+                     help="print the approval URL to stderr instead of opening it")
+    mcp.add_argument("--demo", action="store_true",
+                     help="download and attach the disposable demo image first")
+
+    demo = sub.add_parser("demo", help="attach the disposable NTFS demo image")
+    demo.add_argument("--json", action="store_true")
     return parser
 
 
@@ -393,6 +406,8 @@ def _cmd_web(args: argparse.Namespace, collector: Callable[[], list[Volume]]) ->
             port=args.port, owner=args.owner, environ=os.environ,
             euid=os.geteuid(), open_browser=args.open,
             agent_llm=args.agent_llm, agent_model=args.agent_model,
+            mcp_session=args.mcp_session,
+            exit_on_stdin_eof=args.exit_on_stdin_eof,
         )
     except ValueError as exc:
         print(f"ntfsmnt: {exc}", file=sys.stderr)
@@ -411,11 +426,34 @@ def _cmd_web(args: argparse.Namespace, collector: Callable[[], list[Volume]]) ->
 
 
 def _cmd_mcp(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
-    # The agent surface stays read-only: importing here keeps `ntfsmnt mcp`
-    # from depending on the web extra, and the tools list has no mount verb.
+    # Imported here so the read tools keep working without the web extra; the
+    # action tools start the root controller lazily on first use.
     from ntfsmnt.mcp import serve
 
-    return serve(sys.stdin, sys.stdout)
+    if getattr(args, "demo", False):
+        from ntfsmnt.demo import DemoError, attach_image, ensure_image
+        try:
+            attach_image(ensure_image())
+        except DemoError as exc:
+            print(f"ntfsmnt: {exc}", file=sys.stderr)
+            return 1
+    return serve(sys.stdin, sys.stdout, approve=args.approve,
+                 no_browser=args.no_browser)
+
+
+def _cmd_demo(args: argparse.Namespace, collector: Callable[[], list[Volume]]) -> int:
+    from ntfsmnt.demo import DemoError, attach_image, ensure_image
+
+    try:
+        device = attach_image(ensure_image())
+    except DemoError as exc:
+        print(f"ntfsmnt: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"device": device, "disposable": True}))
+    else:
+        print(f"demo attached: {device} (read-only, disposable)")
+    return 0
 
 
 COMMANDS = {
@@ -427,6 +465,7 @@ COMMANDS = {
     "eject": _cmd_eject,
     "web": _cmd_web,
     "mcp": _cmd_mcp,
+    "demo": _cmd_demo,
 }
 
 

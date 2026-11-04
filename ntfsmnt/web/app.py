@@ -2,6 +2,8 @@ import asyncio
 import hmac
 import json
 import logging
+import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
@@ -18,7 +20,12 @@ from ntfsmnt.web.events import EventBus
 from ntfsmnt.web.schemas import (ActionRequest, ActivityModel, ErrorResponse,
                                  StateModel, activity_model, error_response,
                                  result_model, state_model)
-from ntfsmnt.web.service import Service
+from ntfsmnt.web.service import Service, _Fail
+
+from ntfsmnt.control.audit import AuditLog
+from ntfsmnt.control.grants import GrantError
+from ntfsmnt.control.lock import OperationFileLock
+from ntfsmnt.web.auth import is_agent_request, require_agent
 
 PAGE_DIR = Path(__file__).parent / "page"
 
@@ -34,9 +41,42 @@ def _error(status: int, code: str, message: str, next_step: str | None = None):
     )
 
 
+_GRANT_NEXT = {
+    "grant_required": "Call request_grant; a human must approve it first.",
+    "grant_expired": "Call request_grant again; grants expire.",
+    "grant_revoked": "Call request_grant again and ask for a fresh approval.",
+    "grant_mismatch": "The grant names a different volume.",
+    "grant_action_mismatch": "The grant does not include this action.",
+}
+
+
+async def _grant_check(request: Request, action: str, volume_id: str,
+                       body, svc: Service):
+    """Refuse an agent action before any runner call unless a grant allows it."""
+    if action == "mount":
+        for flag in ("recover", "remove_hiberfile"):
+            if getattr(body, flag, False):
+                return _error(
+                    403, "manual_required",
+                    f"`{flag}` is never granted to an agent.",
+                    f"run `sudo ntfsmnt mount --{flag.replace('_', '-')}` yourself",
+                )
+    try:
+        volume = svc.volume_by_id(volume_id)
+        svc.check_grant(request.headers.get("x-ntfsmnt-grant"), volume, action)
+    except _Fail as fail:
+        return _error(fail.error.status, fail.error.code, fail.error.message)
+    except GrantError as exc:
+        return _error(403, exc.code,
+                      f"the grant does not allow this: {exc.code}",
+                      _GRANT_NEXT.get(exc.code))
+    return None
+
+
 from ntfsmnt.web.auth import require_session  # noqa: F401  (re-exported)
 from ntfsmnt.web.auth import require_mutation  # noqa: F401  (re-exported)
 from ntfsmnt.web.agent import register_agent_routes
+from ntfsmnt.web.grants import register_grant_routes
 
 
 _FORM_TRUE = {"on", "true", "1", "yes"}
@@ -143,7 +183,11 @@ async def _region_response(request: Request, svc: Service, state: StateModel,
 
 
 def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI:
-    svc = service or Service(settings)
+    svc = service or Service(
+        settings,
+        audit=AuditLog(),
+        file_lock=OperationFileLock() if settings.root else None,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -292,11 +336,22 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
 
     @app.post("/api/v1/volumes/{volume_id}/{action}")
     async def act(volume_id: str, action: str, request: Request):
-        try:
-            require_mutation(settings, request)
-        except HTTPException as exc:
-            code = "unauthorized" if exc.status_code == 401 else "forbidden_origin"
-            return _error(exc.status_code, code, exc.detail)
+        agent = is_agent_request(request)
+        if agent:
+            try:
+                require_agent(settings, request)
+            except HTTPException as exc:
+                return _error(401, "unauthorized", exc.detail)
+            if request.headers.get("x-ntfsmnt") != "1":
+                return _error(403, "forbidden_origin", "missing X-NTFSMNT header")
+            if request.headers.get("origin") not in settings.allowed_origins:
+                return _error(403, "forbidden_origin", "origin not allowed")
+        else:
+            try:
+                require_mutation(settings, request)
+            except HTTPException as exc:
+                code = "unauthorized" if exc.status_code == 401 else "forbidden_origin"
+                return _error(exc.status_code, code, exc.detail)
         if action not in ACTIONS:
             return _error(404, "not_found", f"Unknown action {action!r}.")
         try:
@@ -306,6 +361,10 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
             return _error(422, "invalid_request",
                           "Could not read the action request.",
                           "Send a JSON or form-encoded body.")
+        if agent:
+            refused = await _grant_check(request, action, volume_id, body, svc)
+            if refused is not None:
+                return refused
         try:
             result = await asyncio.to_thread(ACTIONS[action], volume_id, body)
         except Exception:
@@ -344,6 +403,7 @@ def create_app(settings: Settings, *, service: Service | None = None) -> FastAPI
         return _error(exc.status_code, code, str(exc.detail))
 
     register_agent_routes(app, settings, svc, templates)
+    register_grant_routes(app, settings, svc, templates)
 
     app.mount("/static", StaticFiles(directory=PAGE_DIR), name="static")
     return app
@@ -358,6 +418,23 @@ async def _publish_state(svc: Service, app: FastAPI) -> str:
         return app.state.last_state_json
 
 
+def _watch_stdin(stream, request_exit) -> threading.Thread:
+    """Exit the controller when its parent closes stdin, so no root server
+    outlives an MCP client that was killed."""
+
+    def watch() -> None:
+        try:
+            while stream.read(1):
+                pass
+        except (OSError, ValueError):
+            pass
+        request_exit()
+
+    thread = threading.Thread(target=watch, name="ntfsmnt-stdin", daemon=True)
+    thread.start()
+    return thread
+
+
 def run_server(settings: Settings) -> None:
     import socket
     import uvicorn
@@ -369,16 +446,35 @@ def run_server(settings: Settings) -> None:
         sock.bind((settings.host, settings.port))
         port = sock.getsockname()[1]
         settings = with_port(settings, port)
-        url = f"http://{settings.host}:{port}/?token={settings.token}"
-        print(f"ntfsmnt web: {url}", flush=True)
-        if settings.open_browser:
-            import webbrowser
-            webbrowser.open(url)
-        config = uvicorn.Config(
-            create_app(settings), log_level="warning", access_log=False,
-        )
+        service = None
+        if settings.mcp_session:
+            service = Service(
+                settings,
+                audit=AuditLog(),
+                file_lock=OperationFileLock() if settings.root else None,
+            )
+            try:
+                service.audit.append("mcp.session.start", client="mcp")
+            except Exception:
+                logger.warning("could not record mcp.session.start", exc_info=True)
+            print(json.dumps({
+                "ntfsmnt": "mcp-session",
+                "port": port,
+                "agent_token": settings.agent_token,
+            }), flush=True)
+        else:
+            url = f"http://{settings.host}:{port}/?token={settings.token}"
+            print(f"ntfsmnt web: {url}", flush=True)
+            if settings.open_browser:
+                import webbrowser
+                webbrowser.open(url)
+        app = create_app(settings, service=service) if service else create_app(settings)
+        config = uvicorn.Config(app, log_level="warning", access_log=False)
+        server = uvicorn.Server(config)
+        if settings.mcp_session and settings.exit_on_stdin_eof:
+            _watch_stdin(sys.stdin, lambda: setattr(server, "should_exit", True))
         try:
-            uvicorn.Server(config).run(sockets=[sock])
+            server.run(sockets=[sock])
         except KeyboardInterrupt:
             # uvicorn re-raises the captured SIGINT after a graceful shutdown;
             # the Ctrl-C that stops the service is not an error.
