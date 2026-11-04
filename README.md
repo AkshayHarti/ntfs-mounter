@@ -30,6 +30,11 @@ $ uv run ntfsmnt unmount HD1
 unmounted HD1
 ```
 
+`HD1` and `HD2` there are example labels. `ntfsmnt list` prints whatever labels
+your disks carry — `Windows`, `SDCARD`, a camera card's name — and every command
+takes that label, a device node, a diskutil identifier, a UUID, or a mount point.
+Nothing is hard-coded to `HD1`.
+
 The tool reports what it actually did. It never guesses a volume, never repairs
 a filesystem on its own, and puts Apple's read-only mount back when an attempt
 fails.
@@ -228,8 +233,8 @@ If `sudo` cannot find `uv`, use `sudo "$(command -v uv)" run ntfsmnt doctor`.
 ### `status`
 
 ```bash
-uv run ntfsmnt status HD1
-# HD1 rw fuse-t /Volumes/HD1 /dev/disk4s1 48213
+uv run ntfsmnt status <label>
+# <label> rw fuse-t /Volumes/<label> /dev/disk4s1 48213
 ```
 
 Prints label, effective state, driver, mount point, device, and the serving
@@ -243,7 +248,7 @@ process id.
 ### `mount`
 
 ```bash
-uv run ntfsmnt mount HD1
+uv run ntfsmnt mount <label>
 ```
 
 This is the command that makes a volume writable. It:
@@ -268,7 +273,7 @@ This is the command that makes a volume writable. It:
 9. writes, reads back, and deletes `.ntfsmnt-probe` inside the volume;
 10. checks with `stat` that the mount point is owned by *your* uid and gid —
     the probe ran as root, so it cannot prove that you can write;
-11. prints `mounted HD1 at /Volumes/HD1`.
+11. prints `mounted <label> at /Volumes/<label>`.
 
 If `/Volumes/DATA` is already a read-write mount of another volume that shares
 this volume's label, `mount` refuses and names the path and the label instead of
@@ -300,7 +305,7 @@ Options:
 ### `unmount`
 
 ```bash
-uv run ntfsmnt unmount HD1
+uv run ntfsmnt unmount <label>
 ```
 
 Tears down the FUSE-T mount, then unmounts Apple's read-only mount for the same
@@ -361,8 +366,8 @@ and remounts Apple's read-only mount.
 ### `eject`
 
 ```bash
-uv run ntfsmnt unmount HD1 --keep-unmounted
-uv run ntfsmnt eject HD1
+uv run ntfsmnt unmount <label> --keep-unmounted
+uv run ntfsmnt eject <label>
 ```
 
 Ejects the **parent disk** (for `/dev/disk4s1` that is `disk4`), so every volume

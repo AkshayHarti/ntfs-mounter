@@ -99,7 +99,7 @@
     <dt>For an agent</dt>
     <dd><code>uvx ntfsmnt mcp</code> — after the one-time <code>sudo ./scripts/install-privileged.sh</code></dd>
     <dt>Then</dt>
-    <dd><code>ntfsmnt list</code> to see volumes, <code>ntfsmnt mount HD1</code> to take one read-write.</dd>
+    <dd><code>ntfsmnt list</code> shows each volume's label; <code>ntfsmnt mount &lt;label&gt;</code> takes that one read-write. The label is whatever the disk is called &mdash; <code>HD1</code>, <code>Windows</code>, <code>SDCARD</code> &mdash; not a fixed name. A UUID or device path works too.</dd>
   </dl>
 
   <p class="future"><strong>Status.</strong> The grant-scoped MCP server is merged and the 0.2.0 release is in progress. PyPI still serves 0.1.0, which has the CLI and the web UI but no MCP server. The checkout install is the reliable way to try the agent path today.</p>
