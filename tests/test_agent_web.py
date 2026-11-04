@@ -3,8 +3,6 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from ntfsmnt.web.agent import register_agent_routes
-from ntfsmnt.web.app import templates
 from ntfsmnt.web.models import (ActionView, DoctorStatus, HostView, OwnerView,
                                 Snapshot, VolumeView)
 from ntfsmnt.web.config import cookie_value
@@ -47,12 +45,11 @@ def snapshot(*volumes):
 
 
 def make_client(service=None):
+    from ntfsmnt.web.app import create_app
+
     settings = h.make_settings()
-    service = service or StubService(snapshot())
-    app = __import__("fastapi").FastAPI()
-    register_agent_routes(app, settings, service, templates)
-    client = TestClient(app)
-    return settings, client
+    app = create_app(settings, service=service or StubService(snapshot()))
+    return settings, TestClient(app)
 
 
 def session(client, settings):
@@ -98,10 +95,10 @@ def test_run_refuses_foreign_origin() -> None:
 
 def test_host_guard_applies_to_agent_pages() -> None:
     settings, client = make_client()
-    # The agent route requires a session like every other page; the Host
-    # allow-list is enforced by middleware in create_app (test_app_contract).
+    # /agent is a 303 alias to /; the Host allow-list is enforced by
+    # middleware in create_app (test_app_contract).
     client.cookies.set(settings.cookie_name, cookie_value(settings.token))
-    assert client.get("/agent").status_code == 200
+    assert client.get("/agent", follow_redirects=False).status_code == 303
     client.cookies.clear()
     assert client.get("/agent").status_code == 401
 
@@ -114,7 +111,8 @@ def test_create_app_registers_the_agent_surface() -> None:
     client = TestClient(app)
     assert client.get("/agent", headers={"host": "evil.example"}).status_code == 421
     client.cookies.set(settings.cookie_name, cookie_value(settings.token))
-    assert client.get("/agent").status_code == 200
+    assert client.get("/agent", follow_redirects=False).status_code == 303
+    assert client.get("/").status_code == 200
     response = client.post("/agent/run", content=body("mount HD1"), headers={
         "x-ntfsmnt": "1", "origin": "http://testserver"})
     assert b'"type":"RUN_FINISHED"' in response.content or \
@@ -182,17 +180,22 @@ def test_library_endpoint() -> None:
 def test_agent_page_serves_html() -> None:
     settings, client = make_client()
     session(client, settings)
-    response = client.get("/agent")
+    response = client.get("/")
     assert response.status_code == 200
     assert "agent.js" in response.text
+    # /agent stays as a 303 alias for old bookmarks.
+    alias = client.get("/agent", follow_redirects=False)
+    assert alias.status_code == 303
+    assert alias.headers["location"] == "/"
 
 
 def test_token_exchange_sets_cookie() -> None:
     settings, client = make_client()
     response = client.get(f"/agent?token={settings.token}", follow_redirects=False)
     assert response.status_code == 303
+    assert response.headers["location"] == "/"
     client.cookies.set(settings.cookie_name, cookie_value(settings.token))
-    assert client.get("/agent").status_code == 200
+    assert client.get("/").status_code == 200
     assert client.get("/agent?token=tampered",
                       follow_redirects=False).status_code == 401
 

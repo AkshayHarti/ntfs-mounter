@@ -4,6 +4,12 @@
 
 Read-write NTFS on macOS, from the command line.
 
+## AI surfaces
+
+- `/` dashboard (alias `/agent`): natural-language intent composes UI from a closed component registry as OpenUI Lang, streamed over SSE as AG-UI events. Deterministic planner by default; optional OpenAI-compatible LLM adapter with validator + deterministic fallback. Agent proposes, you confirm — it never mounts, unmounts, or ejects. Classic page at `/classic`.
+- `ntfsmnt mcp`: grant-scoped MCP server over stdio. Three read tools (`list_volumes`, `get_status`, `run_doctor`) run anywhere; six action tools (mount, unmount, eject, grants) need a narrow, expiring grant a human approves. `--recover` and `--remove-hiberfile` are never grantable.
+- Agent docs: `docs/AGENT.md`, agent index: `site/llms.txt`. Details: [The agentic dashboard](#the-agentic-dashboard--alias-agent).
+
 macOS mounts NTFS read-only through its built-in FSKit driver. `ntfsmnt` replaces
 that mount for one volume at a time with an `ntfs-3g` mount served by
 [FUSE-T](https://www.fuse-t.org/), so ordinary user files can be written without
@@ -415,12 +421,12 @@ after it exits. The CLI remains the source of truth — the page calls the same
 mount, unmount, and eject code, and `ntfsmnt list` is always the authoritative
 view of the current state regardless of what a stale page shows.
 
-### The agentic dashboard (`/agent`)
+### The agentic dashboard (`/`, alias `/agent`)
 
-Next to the classic page, `/agent` is an agentic-first surface: describe what
+The homepage is an agentic-first surface: describe what
 you want ("mount HD1", "run the doctor", "what can you do?") and the agent
 reads the live mount table and composes the page as **OpenUI Lang**, streamed
-over SSE as **AG-UI** events.
+over SSE as **AG-UI** events. The classic page lives at `/classic`.
 
 - The agent proposes; you confirm. Generated buttons call the same guarded
   routes as the classic page — the agent itself never performs a disk
@@ -773,7 +779,7 @@ uv run pytest -q
 
 Without `--extra web` the FastAPI/Jinja API, page, and schema tests skip; the
 service, models, and config tests still run.
-The suite has 523 tests and never touches hardware. Subprocess effects
+The suite has 534 tests and never touches hardware. Subprocess effects
 (`diskutil`, `ntfs-3g`, `mount`, `pgrep`, `kill`, `sleep`) are injected as
 callables, and the mount-point creation, write probe, and ownership `stat` are
 monkeypatched in tests that exercise the orchestration.

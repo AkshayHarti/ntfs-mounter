@@ -3,11 +3,11 @@
 The repo has two AI-facing surfaces. Neither adds a privilege the classic
 flow does not already have.
 
-## The agent page (`/agent`)
+## The agent page (`/`, alias `/agent`)
 
-When the dashboard is running (`sudo ntfsmnt web`), the agent page is at
-`/agent` — linked from the classic dashboard, which is still what the
-menu-bar app opens.
+When the dashboard is running (`sudo ntfsmnt web`), the agent page is the
+homepage at `/` (`/agent` redirects there) — the classic dashboard lives at
+`/classic`, linked from the agent nav chip.
 
 - Type what you want: *"mount HD1"*, *"run the doctor"*, *"what can you do?"*.
   The nav chips at the top send those prompts for you; *Classic dashboard*
