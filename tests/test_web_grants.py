@@ -480,6 +480,18 @@ def test_audit_failure_after_success_still_reports_success(tmp_path, monkeypatch
     assert audit.events == ["mount.attempt", "mount.ok"]
 
 
+def test_audit_failure_blocks_eject_before_any_runner_call(tmp_path, monkeypatch):
+    fake_mount(monkeypatch)
+    audit = AuditLog(tmp_path / "missing" / "audit.jsonl")
+    svc = _service(tmp_path, audit=audit)
+
+    result = svc.eject("UUID-1", label="HD1")
+
+    assert result.ok is False
+    assert result.error.code == "audit_unavailable"
+    assert result.error.status == 503
+
+
 def test_audit_failure_does_not_block_unmount(tmp_path, monkeypatch):
     def fake_unmount(volume, **kw):
         return True

@@ -134,6 +134,7 @@ class GrantStore:
         return request
 
     def pending(self, request_id: str) -> GrantRequest | None:
+        self.expire()
         return self._requests.get(request_id)
 
     def approve(self, request_id: str) -> Grant:

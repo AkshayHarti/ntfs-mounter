@@ -118,6 +118,15 @@ def test_check_rejects_expired(store):
     assert exc.value.code == "grant_expired"
 
 
+def test_pending_request_expires_without_another_store_call():
+    clock = Clock()
+    store = GrantStore(clock=clock)
+    pending = request(store)
+    clock.advance(301)
+
+    assert store.pending(pending.id) is None
+
+
 def test_check_rejects_revoked(store):
     grant = store.approve(request(store).id)
 

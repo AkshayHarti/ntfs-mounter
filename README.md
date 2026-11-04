@@ -1,5 +1,7 @@
 # ntfsmnt
 
+<!-- mcp-name: io.github.akshayharti/ntfsmnt -->
+
 Read-write NTFS on macOS, from the command line.
 
 macOS mounts NTFS read-only through its built-in FSKit driver. `ntfsmnt` replaces
@@ -132,8 +134,9 @@ The npm package is a dependency-free proxy: it finds the real Python CLI
 (Homebrew, `uv tool`, the root-owned copy, `~/.local/bin`, then `PATH`) and
 hands it your arguments unchanged; if none is installed it falls back to
 `uvx --from "ntfsmnt[web]" ntfsmnt`. It does not reimplement anything, and the
-macOS prerequisites above still apply. The first npm publish lands on the next
-`v*` tag; before that, `npm link ./npm` from a checkout. See
+macOS prerequisites above still apply. The package is bootstrapped with a
+`bootstrap`-tagged prerelease, then CI publishes real versions on `v*` tags;
+before the first publish, use `npm link ./npm` from a checkout. See
 [docs/NPM.md](docs/NPM.md).
 
 ### 5. From a checkout (development)

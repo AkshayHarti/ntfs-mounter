@@ -13,12 +13,13 @@ Repo-local agent rules for `repos/ntfs-mounter`. Read before editing this repo.
 ## Commands
 
 - Install deps: `uv sync` (add `--extra web` for the browser UI and its tests)
-- Test: `uv run pytest -q` (523 tests; without `--extra web` the FastAPI/Jinja
+- Test: `uv run pytest -q` (532 tests; without `--extra web` the FastAPI/Jinja
   API, page, and schema tests skip, while the service, models, and config tests
   run)
 - Prerequisite check: `./scripts/setup.sh --check` (read-only, exits 0 anywhere)
 - Prerequisites install: `./scripts/setup.sh` (FUSE-T cask + FUSE-T-linked ntfs-3g)
-- Release: see `docs/RELEASING.md`; version lives only in `ntfsmnt/__init__.py`
+- Release: see `docs/RELEASING.md`; bump all three synced versions:
+  `ntfsmnt/__init__.py` (source of truth), `npm/package.json`, `server.json`
 - App build: `bash scripts/build-app.sh` (unsigned bundle in `dist/`)
 - App install: `bash scripts/install-app.sh [--user] [--launch]`
 - Privileged setup: `sudo ./scripts/install-privileged.sh` (`--local` installs the

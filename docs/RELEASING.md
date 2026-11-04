@@ -29,6 +29,10 @@ Three files carry the version and **all three must match**:
 | `npm/package.json` | `version` | the npm channel |
 | `server.json` | top-level `version` and `packages[].version` | the MCP registry entry |
 
+`Formula/ntfsmnt.rb` is outside that rule but is also version-pinned: it names
+the sdist URL and `sha256` of a *published* version (still `0.1.0`), so it
+needs its own update after the PyPI release; see `docs/HOMEBREW.md`.
+
 `pyproject.toml` uses a dynamic version read from `ntfsmnt/__init__.py`, so do
 not add or edit a `version =` line there. Set it in `ntfsmnt/__init__.py`:
 
@@ -151,7 +155,7 @@ whose hash does not match is deleted and the command fails.
 
 - the version in `server.json` is live on PyPI (section 7), because the `pypi`
   package entry points at that exact version.
-- `README.md` starts with the ownership marker
+- `README.md` contains the ownership marker
   `<!-- mcp-name: io.github.akshayharti/ntfsmnt -->`; the registry reads it to
   prove the README belongs to the server named in `server.json`.
 

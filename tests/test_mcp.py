@@ -1,5 +1,6 @@
 import json
 
+from ntfsmnt import __version__
 from ntfsmnt.mcp import PROTOCOL_VERSION, call_tool, handle, serve
 from ntfsmnt.volumes import VolumeError
 
@@ -25,6 +26,7 @@ def test_initialize_announces_tools_capability() -> None:
     reply = rpc("initialize")
     assert reply["result"]["protocolVersion"] == PROTOCOL_VERSION
     assert reply["result"]["serverInfo"]["name"] == "ntfsmnt"
+    assert reply["result"]["serverInfo"]["version"] == __version__
 
 
 def test_tools_list_covers_read_and_action_tools() -> None:
