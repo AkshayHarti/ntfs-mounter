@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Start — mount an NTFS disk with ntfsmnt</title>
+<meta name="description" content="A step-by-step first run for ntfsmnt: install, find your disk, build the mount command from your own volume label, verify the write, and put the volume back. Honest about what the page cannot see.">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131312" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <p class="wordmark"><a href="index.html">ntfsmnt</a></p>
+  <nav aria-label="Sections">
+    <a href="start.html">Start</a>
+    <a href="why.html">Why ntfsmnt</a>
+    <a href="index.html#install">Install</a>
+    <a href="index.html#run">Commands</a>
+    <a href="index.html#design">Design</a>
+  </nav>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <h1>Mount your NTFS disk, step by step.</h1>
+  <p class="lede">Six steps from a fresh Mac to a writable disk, using your own volume label. The page builds the commands; you run them. It cannot see your hardware, and it will not pretend to.</p>
+  <p class="evidence">macOS only &middot; no kernel extension &middot; no SIP change &middot; no reboot</p>
+</section>
+
+<p class="notice" role="note">
+  <strong>This page cannot see your disk.</strong> Everything it shows comes from what you paste below, plus the steps you mark done. Where it guesses, it says so.
+</p>
+
+<ol class="steps" id="steps">
+
+  <li class="step" id="fit" data-step="fit">
+    <details open>
+      <summary class="step-head">
+        <h2 class="step-title"><span class="step-num" aria-hidden="true">0</span> Is this your machine?</h2>
+        <span class="step-done" hidden>done</span>
+      </summary>
+      <div class="step-body" id="fit-body">
+      <p>Three requirements, and one of them is a real permission prompt.</p>
+      <ul class="invariants">
+        <li><strong>A Mac.</strong> Verified on Apple Silicon running macOS 26.5.2. Intel is untested.</li>
+        <li><strong>Your admin password, once.</strong> The setup script calls <code>sudo</code> to install <code>ntfs-3g</code>; the FUSE-T installer asks for a password itself.</li>
+        <li><strong>Full Disk Access (FDA).</strong> Reading a raw disk device needs it. Grant it to your terminal app in System Settings &rarr; Privacy &amp; Security &rarr; Full Disk Access. Without it, the mount fails with a permission error that looks like a bug.</li>
+      </ul>
+      <p class="actions">
+        <button type="button" class="action" data-next="install">This is my machine</button>
+      </p>
+      </div>
+    </details>
+  </li>
+
+  <li class="step" id="install" data-step="install">
+    <details open>
+      <summary class="step-head">
+        <h2 class="step-title"><span class="step-num" aria-hidden="true">1</span> Install</h2>
+        <span class="step-done" hidden>done</span>
+      </summary>
+      <div class="step-body" id="install-body">
+      <p>Prerequisites first, from a checkout. It is idempotent; satisfied steps are skipped.</p>
+
+      <div class="cmd">
+        <button type="button" class="cmd-copy" data-copy="git clone https://github.com/AkshayHarti/ntfs-mounter.git &amp;&amp; cd ntfs-mounter &amp;&amp; ./scripts/setup.sh">Copy</button>
+        <code>git clone https://github.com/AkshayHarti/ntfs-mounter.git &amp;&amp; cd ntfs-mounter &amp;&amp; ./scripts/setup.sh</code>
+      </div>
+      <p class="hint">To see what is missing without changing anything, run <code>./scripts/setup.sh --check</code> first.</p>
+
+      <p>Then the tool itself:</p>
+      <div class="cmd">
+        <button type="button" class="cmd-copy" data-copy="uv tool install &quot;ntfsmnt[web]&quot;">Copy</button>
+        <code>uv tool install "ntfsmnt[web]"</code>
+      </div>
+
+      <p>Check that everything is reachable:</p>
+      <div class="cmd">
+        <button type="button" class="cmd-copy" data-copy="ntfsmnt doctor">Copy</button>
+        <code>ntfsmnt doctor</code>
+      </div>
+
+      <details class="disclosure">
+        <summary>One of the doctor checks failed</summary>
+        <p><code>doctor</code> reports four things: FUSE-T present, <code>ntfs-3g</code> linked against FUSE-T, <code>root</code>, and <code>device-access</code>.</p>
+        <p>Run unprivileged, the <code>root</code> and <code>device-access</code> checks fail by design. That is not a problem to fix. A <em>missing FUSE-T</em>, or an <code>ntfs-3g</code> that is not linked against it, is.</p>
+      </details>
+
+      <p class="actions">
+        <button type="button" class="action" data-next="find">doctor was clean</button>
+      </p>
+      <p class="hint">Clicking this records your word, not a check. This page did not run anything.</p>
+      </div>
+    </details>
+  </li>
+
+  <li class="step" id="find" data-step="find">
+    <details open>
+      <summary class="step-head">
+        <h2 class="step-title"><span class="step-num" aria-hidden="true">2</span> Find your disk</h2>
+        <span class="step-done" hidden>done</span>
+      </summary>
+      <div class="step-body" id="find-body">
+      <p>List the volumes the tool can see:</p>
+      <div class="cmd">
+        <button type="button" class="cmd-copy" data-copy="ntfsmnt list">Copy</button>
+        <code>ntfsmnt list</code>
+      </div>
+
+      <p>It prints one line per volume. Paste the line for the disk you want to write to &mdash; not the header, and not both lines.</p>
+
+      <p class="hint">If the script <code>./scripts/setup.sh</code> is still in your terminal, use <code>uv run ntfsmnt list</code> instead. From then on, every command on this page works with <code>uv run</code> in front.</p>
+
+      <p class="field">
+        <label for="paste">One line from <code>ntfsmnt list</code></label>
+        <textarea id="paste" rows="2" spellcheck="false" autocomplete="off" aria-describedby="paste-help paste-error"
+          placeholder="/dev/disk4s1  My Passport  1000296415232  ro  /Volumes/My Passport"></textarea>
+      </p>
+      <p class="hint" id="paste-help">Five columns: device, label, size in bytes, state, mount point. The label may contain spaces.</p>
+      <p class="error" id="paste-error" role="alert" hidden></p>
+
+      <div class="dyn" id="parsed" hidden>
+        <dl class="parsed">
+          <dt>Device</dt><dd data-field="device">&mdash;</dd>
+          <dt>Label</dt><dd data-field="label">&mdash;</dd>
+          <dt>State</dt><dd data-field="state">&mdash;</dd>
+          <dt>Mount point</dt><dd data-field="mount">&mdash;</dd>
+        </dl>
+      </div>
+
+      <div class="static-commands">
+        <p>With JavaScript off, the page cannot read your paste. The command shape is:</p>
+        <div class="cmd"><code>ntfsmnt mount &lt;label&gt;</code></div>
+        <p class="hint">The label is whatever <code>ntfsmnt list</code> prints &mdash; <code>My Passport</code>, <code>Windows</code>, <code>SDCARD</code>. A device path, a diskutil identifier, or a UUID works too.</p>
+      </div>
+      </div>
+    </details>
+  </li>
+
+  <li class="step" id="mount" data-step="mount">
+    <details open>
+      <summary class="step-head">
+        <h2 class="step-title"><span class="step-num" aria-hidden="true">3</span> Take the disk read-write</h2>
+        <span class="step-done" hidden>done</span>
+      </summary>
+      <div class="step-body" id="mount-body">
+      <p id="mount-waiting">Paste a volume line in <a href="#find">step 2</a> and the command for that disk appears here. This page will not show a placeholder that looks real.</p>
+
+      <div class="dyn" id="mount-ready" hidden>
+        <p>For <strong data-field="label">&mdash;</strong>, run:</p>
+        <div class="cmd">
+          <button type="button" class="cmd-copy" id="mount-copy">Copy</button>
+          <code id="mount-cmd">&mdash;</code>
+        </div>
+        <p class="hint">No <code>sudo</code> in front. The CLI re-execs itself through <code>sudo</code> and will ask for your password in the terminal.</p>
+
+        <p class="actions">
+          <button type="button" class="action" data-next="verify">It printed <code>mounted</code></button>
+          <button type="button" class="action secondary" data-refusal="open">It refused</button>
+        </p>
+      </div>
+      </div>
+    </details>
+  </li>
+
+  <li class="step" id="verify" data-step="verify">
+    <details open>
+      <summary class="step-head">
+        <h2 class="step-title"><span class="step-num" aria-hidden="true">4</span> Prove the write landed</h2>
+        <span class="step-done" hidden>done</span>
+      </summary>
+      <div class="step-body" id="verify-body">
+      <p>The tool already wrote a probe file and deleted it. This is your own copy of that test, in the mount point you pasted.</p>
+
+      <div class="dyn" id="verify-ready" hidden>
+        <p>Write one line:</p>
+        <div class="cmd">
+          <button type="button" class="cmd-copy" id="verify-write-copy">Copy</button>
+          <code id="verify-write">&mdash;</code>
+        </div>
+        <p>Read it back:</p>
+        <div class="cmd">
+          <button type="button" class="cmd-copy" id="verify-read-copy">Copy</button>
+          <code id="verify-read">&mdash;</code>
+        </div>
+        <p>Delete it:</p>
+        <div class="cmd">
+          <button type="button" class="cmd-copy" id="verify-rm-copy">Copy</button>
+          <code id="verify-rm">&mdash;</code>
+        </div>
+
+        <p class="actions">
+          <button type="button" class="action" data-next="eject">The file appeared</button>
+        </p>
+        <p class="hint">If the write failed, the volume is not writable and the tool's own probe should have caught it. Do not force anything with the flags in step 3's refusal notes.</p>
+      </div>
+      </div>
+    </details>
+  </li>
+
+  <li class="step" id="eject" data-step="eject">
+    <details open>
+      <summary class="step-head">
+        <h2 class="step-title"><span class="step-num" aria-hidden="true">5</span> Put it back</h2>
+        <span class="step-done" hidden>done</span>
+      </summary>
+      <div class="step-body" id="eject-body">
+      <div class="dyn" id="eject-ready" hidden>
+        <p>Unmount and restore Apple's read-only mount:</p>
+        <div class="cmd">
+          <button type="button" class="cmd-copy" id="eject-copy">Copy</button>
+          <code id="eject-cmd">&mdash;</code>
+        </div>
+        <p>To eject the device afterwards, use <code>ntfsmnt eject &lt;label&gt;</code>, or eject it from Finder.</p>
+
+        <p class="hint">If the read-only restore fails, the tool says so and prints the fix: <code>sudo diskutil mount &lt;device&gt;</code>. This page never claims a clean restore on its own.</p>
+        <p class="hint">Need it gone for a while? <code>ntfsmnt unmount &lt;label&gt; --keep-unmounted</code> leaves the volume unmounted instead of restoring the read-only mount.</p>
+      </div>
+      <div class="static-commands">
+        <p>With JavaScript off, the command is:</p>
+        <div class="cmd"><code>ntfsmnt unmount &lt;label&gt;</code></div>
+      </div>
+      </div>
+    </details>
+  </li>
+
+</ol>
+
+<section id="refusal" class="refusal" hidden>
+  <h2>When the mount refuses</h2>
+  <p>The tool prints one sentence that names the cause, then stops. Here is what each sentence means, and the one thing this page will not do about it.</p>
+
+  <div class="refusal-grid">
+    <article class="refusal-card" data-cause="hibernated">
+      <h3>Hibernated</h3>
+      <p class="quote">The volume is hibernated. Re-run with --remove-hiberfile to discard the hibernation file and mount it.</p>
+      <p>The disk was left by Windows Fast Startup or hibernation, and one file on it holds a memory image that must not be overwritten.</p>
+      <p><strong>What to do:</strong> boot Windows on that machine and shut it down fully &mdash; hold Shift while clicking Shut down, or disable Fast Startup. Then mount again.</p>
+    </article>
+
+    <article class="refusal-card" data-cause="dirty">
+      <h3>Dirty</h3>
+      <p class="quote">The volume is marked dirty. Re-run with --recover to let ntfs-3g replay its journal and mount it.</p>
+      <p>Windows did not finish writing, so the filesystem's journal has unfinished work in it.</p>
+      <p><strong>What to do:</strong> if the data matters, let Windows run its own check on the disk first. <code>--recover</code> replays the journal; it is a recovery step, not a repair, and this page will not generate it for you.</p>
+    </article>
+
+    <article class="refusal-card" data-cause="busy">
+      <h3>Busy</h3>
+      <p class="quote">The volume is already mounted or files on it are open. Unmount it or close those files, then try again.</p>
+      <p>Something else holds the volume: Finder, a backup, an editor with a file open.</p>
+      <p><strong>What to do:</strong> close the files, then run <code>ntfsmnt unmount &lt;label&gt;</code> and try the mount again.</p>
+    </article>
+
+    <article class="refusal-card" data-cause="permission">
+      <h3>Permission denied</h3>
+      <p class="quote">Permission denied opening the disk. Grant Full Disk Access to your terminal app in System Settings &gt; Privacy &amp; Security, then try again.</p>
+      <p>Full Disk Access is missing, or was granted to a different terminal app than the one you are using.</p>
+      <p><strong>What to do:</strong> add the exact app you are typing in &mdash; Terminal, iTerm, VS Code &mdash; then quit and reopen it. macOS does not apply the change to a running process.</p>
+    </article>
+  </div>
+
+  <details class="disclosure">
+    <summary>Paste what the terminal printed</summary>
+    <p class="field">
+      <label for="failure">The failure text</label>
+      <textarea id="failure" rows="3" spellcheck="false" aria-describedby="failure-help"></textarea>
+    </p>
+    <p class="hint" id="failure-help">The page matches the tool's own sentences. Nothing is uploaded and nothing is stored.</p>
+    <p class="error" id="failure-status" role="status" hidden></p>
+  </details>
+
+  <p class="scope"><strong>The two flags you should not copy from a blog post.</strong> <code>--recover</code> replays the filesystem journal. <code>--remove-hiberfile</code> deletes a hibernation file that may hold unsaved work. Both exist, both are deliberate, and neither is generated anywhere on this page or reachable from the MCP tools. If you need them, run them yourself after reading what they discard.</p>
+
+  <p class="hint"><a href="#mount">Back to the mount step</a></p>
+</section>
+
+<p class="sr-only" aria-live="polite" id="live"></p>
+<p class="sr-only" aria-live="polite" aria-atomic="true" id="live-copy"></p>
+
+<noscript>
+  <p class="notice">With JavaScript off, this page cannot build commands for your disk. Every step is shown expanded above, with the generic command shape. The full command reference is on the <a href="index.html#run">project page</a>.</p>
+</noscript>
+
+</main>
+
+<footer class="site-footer">
+  <p class="footer-line">
+    <a href="https://github.com/AkshayHarti/ntfs-mounter/blob/main/LICENSE">MIT licence</a>
+    <span aria-hidden="true">/</span>
+    <a href="https://pypi.org/project/ntfsmnt/">PyPI</a>
+    <span aria-hidden="true">/</span>
+    <a href="https://github.com/AkshayHarti/ntfs-mounter">GitHub</a>
+  </p>
+  <p class="footer-line muted">ntfsmnt 0.2.0 &middot; updated <time datetime="2026-11-04">2026-11-04</time> &middot; <a href="https://akshayharti.github.io/ntfs-mounter/">akshayharti.github.io/ntfs-mounter</a></p>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  var body = document.body;
+  body.classList.add('js');
+
+  // Without JS every step stays open (native <details>). With JS, gate to step 0.
+  Array.prototype.forEach.call(document.querySelectorAll('.step > details'), function (d) {
+    if (d.parentNode.id !== 'fit') d.open = false;
+  });
+
+  var $ = function (sel, root) { return (root || document).querySelector(sel); };
+  var $$ = function (sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); };
+
+  var live = $('#live');
+  var liveCopy = $('#live-copy');
+
+  function announce(msg) { if (live) { live.textContent = ''; live.textContent = msg; } }
+
+  // parse:start
+  function parseVolumeLine(raw) {
+    var lines = String(raw).split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+    if (lines.length === 0) return { ok: false, reason: 'Paste one line from ntfsmnt list.' };
+    if (lines.length > 1) return { ok: false, reason: 'That is more than one line. Paste the line for a single volume.' };
+    var text = lines[0];
+    if (/^DEVICE\s+LABEL\s+SIZE\s+STATE\s+MOUNT$/i.test(text)) {
+      return { ok: false, reason: 'That is the header row. Paste a volume line, not the header.' };
+    }
+    var cols = text.split(/\s{2,}/);
+    if (cols.length !== 5) {
+      return { ok: false, reason: 'Expected five columns: DEVICE, LABEL, SIZE, STATE, MOUNT.' };
+    }
+    var device = cols[0], label = cols[1], size = cols[2], state = cols[3], mount = cols[4];
+    if (!/^\/dev\/disk\d+s\d+$/.test(device)) {
+      return { ok: false, reason: 'The DEVICE column should look like /dev/disk4s1.' };
+    }
+    if (!/^\d+$/.test(size)) {
+      return { ok: false, reason: 'The SIZE column should be a number of bytes.' };
+    }
+    if (['rw', 'ro', 'unmounted'].indexOf(state) === -1) {
+      return { ok: false, reason: 'The STATE column should be rw, ro, or unmounted.' };
+    }
+    if (mount !== '-' && mount.indexOf('/Volumes/') !== 0) {
+      return { ok: false, reason: 'The MOUNT column should be - or a path starting /Volumes/.' };
+    }
+    if (!label) return { ok: false, reason: 'The LABEL column is empty.' };
+    return { ok: true, device: device, label: label, size: size, state: state, mount: mount };
+  }
+
+  function shellQuote(value) {
+    if (/^[A-Za-z0-9._\-\/]+$/.test(value)) return value;
+    return "'" + value.replace(/'/g, "'\\''") + "'";
+  }
+  // parse:end
+
+  var current = null;
+
+  function setBody(sel, text) {
+    $$(sel).forEach(function (el) { el.textContent = text; });
+  }
+
+  function detailOf(id) {
+    var step = document.getElementById(id);
+    return step ? $('details', step) : null;
+  }
+
+  function openStep(id) {
+    var d = detailOf(id);
+    if (!d) return;
+    d.open = true;
+    var done = $('.step-done', d.parentNode);
+    if (done && id !== 'eject') done.hidden = false;
+  }
+
+  function gotoStep(id, focusIt) {
+    openStep(id);
+    if (focusIt) {
+      var summary = $('#' + id + ' summary');
+      if (summary) summary.focus();
+    }
+    announce('Step ' + id + ' opened.');
+  }
+
+  // "Next" actions
+  $$('[data-next]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      gotoStep(btn.dataset.next, btn.dataset.next === 'eject');
+    });
+  });
+
+  // Copy
+  $$('.cmd-copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var text = btn.dataset.copy;
+      if (text === undefined) {
+        var code = btn.parentNode.querySelector('code');
+        text = code ? code.textContent : '';
+      }
+      copy(btn, text);
+    });
+  });
+
+  function copy(btn, text) {
+    var done = function (ok) {
+      if (ok) {
+        var label = btn.textContent;
+        btn.textContent = 'Copied';
+        btn.classList.add('is-copied');
+        if (liveCopy) liveCopy.textContent = 'Copied to clipboard.';
+        window.setTimeout(function () {
+          btn.textContent = label;
+          btn.classList.remove('is-copied');
+        }, 2000);
+      } else {
+        selectNode(btn.parentNode.querySelector('code'));
+        btn.textContent = 'Press \u2318C';
+        if (liveCopy) liveCopy.textContent = 'Clipboard unavailable. The command is selected; press Command C.';
+      }
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+    } else {
+      done(false);
+    }
+  }
+
+  function selectNode(node) {
+    if (!node) return;
+    var range = document.createRange();
+    range.selectNodeContents(node);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  // Paste parsing
+  var paste = $('#paste');
+  var pasteError = $('#paste-error');
+
+  function showError(msg) {
+    if (!pasteError) return;
+    pasteError.textContent = msg;
+    pasteError.hidden = false;
+    paste.setAttribute('aria-invalid', 'true');
+  }
+
+  function clearError() {
+    if (!pasteError) return;
+    pasteError.hidden = true;
+    pasteError.textContent = '';
+    paste.removeAttribute('aria-invalid');
+  }
+
+  function hideReady() {
+    ['mount-ready', 'verify-ready', 'eject-ready'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.hidden = true;
+    });
+    var waiting = document.getElementById('mount-waiting');
+    if (waiting) waiting.hidden = false;
+    var note = $('.refusal-paste-note');
+    if (note) note.remove();
+    ['mount-cmd', 'verify-write', 'verify-read', 'verify-rm', 'eject-cmd'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.textContent = '\u2014';
+    });
+  }
+
+  function render(vol) {
+    hideReady();
+    current = vol;
+    $$('[data-field="device"]').forEach(function (el) { el.textContent = vol.device; });
+    $$('[data-field="label"]').forEach(function (el) { el.textContent = vol.label; });
+    $$('[data-field="state"]').forEach(function (el) { el.textContent = vol.state; });
+    $$('[data-field="mount"]').forEach(function (el) { el.textContent = vol.mount; });
+    var parsed = $('#parsed');
+    if (parsed) parsed.hidden = false;
+
+    var q = shellQuote(vol.label);
+
+    if (vol.state === 'ro' || vol.state === 'unmounted') {
+      var cmd = 'ntfsmnt mount ' + q;
+      var el = $('#mount-cmd');
+      if (el) el.textContent = cmd;
+      var copyBtn = $('#mount-copy');
+      if (copyBtn) copyBtn.dataset.copy = cmd;
+
+      if (vol.state === 'unmounted') {
+        showRefusal('unmounted');
+        announce('This volume is not mounted. Attach it first.');
+        return;
+      }
+
+      var waiting = $('#mount-waiting');
+      if (waiting) waiting.hidden = true;
+      var ready = $('#mount-ready');
+      if (ready) ready.hidden = false;
+      gotoStep('mount', false);
+      announce('Command ready for ' + vol.label + '.');
+    } else if (vol.state === 'rw') {
+      showRefusal('rw');
+      announce('This volume is already mounted read-write.');
+    }
+  }
+
+  if (paste) {
+    paste.addEventListener('input', function () {
+      clearError();
+      var raw = paste.value;
+      if (!raw.trim()) return;
+      var result = parseVolumeLine(raw);
+      if (!result.ok) { showError(result.reason); return; }
+      render(result);
+    });
+
+    paste.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { paste.value = ''; clearError(); }
+    });
+
+    paste.addEventListener('blur', function () {
+      if (paste.value.trim() && !current) {
+        var result = parseVolumeLine(paste.value);
+        if (!result.ok) showError(result.reason);
+      }
+    });
+  }
+
+  // Verify + eject commands follow from the parsed mount point
+  function whenReady(vol) {
+    var mount = vol.mount === '-' ? '/Volumes/' + vol.label : vol.mount;
+    var target = mount.replace(/\/$/, '') + '/.ntfsmnt-check';
+    var qTarget = shellQuote(target);
+
+    var write = "printf 'ntfsmnt write test\\n' > " + qTarget;
+    var read = 'cat ' + qTarget;
+    var rm = 'rm ' + qTarget;
+
+    var w = $('#verify-write'); if (w) w.textContent = write;
+    var r = $('#verify-read'); if (r) r.textContent = read;
+    var d = $('#verify-rm'); if (d) d.textContent = rm;
+    var wb = $('#verify-write-copy'); if (wb) wb.dataset.copy = write;
+    var rb = $('#verify-read-copy'); if (rb) rb.dataset.copy = read;
+    var db = $('#verify-rm-copy'); if (db) db.dataset.copy = rm;
+    var vr = $('#verify-ready'); if (vr) vr.hidden = false;
+
+    var unmount = 'ntfsmnt unmount ' + shellQuote(vol.label);
+    var u = $('#eject-cmd'); if (u) u.textContent = unmount;
+    var ub = $('#eject-copy'); if (ub) ub.dataset.copy = unmount;
+    var er = $('#eject-ready'); if (er) er.hidden = false;
+  }
+
+  var origRender = render;
+  render = function (vol) {
+    origRender(vol);
+    if (vol.state === 'ro') whenReady(vol);
+  };
+
+  // Refusal section
+  var refusal = $('#refusal');
+
+  function showRefusal(kind) {
+    if (!refusal) return;
+    refusal.hidden = false;
+    $$('.refusal-card', refusal).forEach(function (card) {
+      card.classList.toggle('is-active', card.dataset.cause === kind ||
+        (kind === 'rw' && card.dataset.cause === 'busy') ||
+        (kind === 'unmounted' && card.dataset.cause === 'busy'));
+    });
+    if (kind === 'rw' || kind === 'unmounted') {
+      var grid = $('.refusal-grid', refusal);
+      if (grid) {
+        var note = document.createElement('p');
+        note.className = 'notice';
+        note.textContent = kind === 'rw'
+          ? 'Your paste says this volume is already read-write. There is nothing to mount.'
+          : 'Your paste says this volume is not mounted. Attach it, then run ntfsmnt list again.';
+        var old = $('.refusal-paste-note', refusal);
+        if (old) old.remove();
+        note.classList.add('refusal-paste-note');
+        grid.parentNode.insertBefore(note, grid);
+      }
+    }
+  }
+
+  $$('[data-refusal="open"]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      showRefusal('hibernated');
+      if (refusal) refusal.scrollIntoView({ block: 'start' });
+      announce('Refusal section opened.');
+    });
+  });
+
+  // Failure-text matcher, mirroring ntfsmnt/options.py order
+  var failure = $('#failure');
+  var failureStatus = $('#failure-status');
+
+  function matchCause(text) {
+    var t = String(text).toLowerCase();
+    if (t.indexOf('hibernat') !== -1) return 'hibernated';
+    if (t.indexOf('unclean') !== -1 || t.indexOf('dirty') !== -1) return 'dirty';
+    if (t.indexOf('busy') !== -1 || t.indexOf('in use') !== -1) return 'busy';
+    if (t.indexOf('operation not permitted') !== -1 || t.indexOf('eperm') !== -1) return 'permission';
+    return null;
+  }
+
+  if (failure) {
+    failure.addEventListener('input', function () {
+      var cause = matchCause(failure.value);
+      $$('.refusal-card', refusal).forEach(function (card) {
+        card.classList.toggle('is-active', card.dataset.cause === cause);
+      });
+      if (!failureStatus) return;
+      if (!failure.value.trim()) { failureStatus.hidden = true; return; }
+      failureStatus.hidden = false;
+      failureStatus.textContent = cause
+        ? 'Matched: ' + $('.refusal-card[data-cause="' + cause + '"] h3').textContent + '.'
+        : 'No match. The four causes below cover the sentences the tool prints; copy yours to an issue if it is different.';
+    });
+  }
+
+  // Deep links
+  if (location.hash) {
+    var target = location.hash.slice(1);
+    if (document.getElementById(target)) {
+      if (target === 'refusal') { refusal.hidden = false; }
+      openStep(target);
+    }
+  }
+
+  var nojs = $('noscript');
+  if (nojs) nojs.hidden = true;
+})();
+</script>
+
+</body>
+</html>
