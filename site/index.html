@@ -17,6 +17,7 @@
 <header class="site-header">
   <p class="wordmark">ntfsmnt</p>
   <nav aria-label="Sections">
+    <a href="why.html">Why ntfsmnt</a>
     <a href="#install">Install</a>
     <a href="#problem">The problem</a>
     <a href="#solution">The solution</a>
@@ -32,7 +33,7 @@
 <section id="install" class="hero">
   <h1>Read-write NTFS on macOS, from the command line.</h1>
   <p class="lede">ntfsmnt replaces Apple&rsquo;s read-only NTFS mount for one volume at a time with an ntfs-3g mount served by FUSE-T: no kernel extension, no SIP change, no reboot.</p>
-  <p class="evidence">407 tests &middot; MIT licence &middot; Python &ge; 3.12 &middot; macOS only, verified on Apple Silicon (macOS 26.5.2)</p>
+  <p class="evidence">534 tests &middot; MIT licence &middot; Python &ge; 3.12 &middot; macOS only, verified on Apple Silicon (macOS 26.5.2)</p>
 
   <div class="install">
     <article class="option">
@@ -50,7 +51,7 @@
     <article class="option">
       <h2 class="option-title">From npm</h2>
       <pre><code>npx ntfsmnt --help</code></pre>
-      <p>A dependency-free proxy: it finds the real Python CLI and hands it your arguments, or falls back to <code>uvx --from "ntfsmnt[web]"</code>. It reimplements nothing; the native prerequisites are still required. The first npm publish lands on the next <code>v*</code> tag.</p>
+      <p>A dependency-free proxy: it finds the real Python CLI and hands it your arguments, or falls back to <code>uvx --from "ntfsmnt[web]"</code>. It reimplements nothing; the native prerequisites are still required. The package is bootstrapped once with a <code>bootstrap</code>-tagged prerelease, then CI publishes real versions on <code>v*</code> tags.</p>
     </article>
 
     <article class="option">
@@ -150,7 +151,7 @@
   <pre><code>uv sync --extra web
 uv run pytest -q</code></pre>
 
-  <p>That is 407 tests. The important ones use the injected-runner pattern: every subprocess effect goes through an injected callable (<code>run</code>, <code>read_mount_table</code>, <code>sleep</code>, the write probe), so the full mount and unmount sequences run without touching <code>/Volumes</code>. The npm proxy has its own <code>node:test</code> suite, run by CI.</p>
+  <p>That is 534 tests. The important ones use the injected-runner pattern: every subprocess effect goes through an injected callable (<code>run</code>, <code>read_mount_table</code>, <code>sleep</code>, the write probe), so the full mount and unmount sequences run without touching <code>/Volumes</code>. The npm proxy has its own <code>node:test</code> suite, run by CI.</p>
 
   <p>The safety invariants and the web-layer invariants live in <a href="https://github.com/AkshayHarti/ntfs-mounter/blob/main/AGENTS.md">AGENTS.md</a>. A good change adds tests in that injected-runner style and keeps the <a href="https://github.com/AkshayHarti/ntfs-mounter/blob/main/README.md">README</a> and AGENTS.md honest about what is verified and what is not.</p>
 
@@ -167,7 +168,7 @@ uv run pytest -q</code></pre>
     <span aria-hidden="true">/</span>
     <a href="https://github.com/AkshayHarti/ntfs-mounter">GitHub</a>
   </p>
-  <p class="footer-line muted">ntfsmnt 0.1.0 &middot; updated <time datetime="2026-10-23">2026-10-23</time> &middot; <a href="https://akshayharti.github.io/ntfs-mounter/">akshayharti.github.io/ntfs-mounter</a></p>
+  <p class="footer-line muted">ntfsmnt 0.2.0 &middot; updated <time datetime="2026-11-04">2026-11-04</time> &middot; <a href="https://akshayharti.github.io/ntfs-mounter/">akshayharti.github.io/ntfs-mounter</a></p>
 </footer>
 
 </body>
