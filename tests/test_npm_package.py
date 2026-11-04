@@ -12,6 +12,7 @@ PACKAGE = NPM / "package.json"
 WRAPPER = NPM / "bin" / "ntfsmnt.js"
 WORKFLOW = ROOT / ".github" / "workflows" / "npm.yml"
 INIT = ROOT / "ntfsmnt" / "__init__.py"
+SERVER = ROOT / "server.json"
 
 
 def _declared_version() -> str:
@@ -31,6 +32,12 @@ def _package() -> dict:
 
 def test_version_matches_python() -> None:
     assert _package()["version"] == _declared_version()
+
+
+def test_version_matches_the_mcp_registry_manifest() -> None:
+    server = json.loads(SERVER.read_text(encoding="utf-8"))
+    pypi = next(p for p in server["packages"] if p["registryType"] == "pypi")
+    assert _package()["version"] == _declared_version() == pypi["version"]
 
 
 def test_name_and_bin() -> None:

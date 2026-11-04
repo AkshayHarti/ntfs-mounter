@@ -1,9 +1,19 @@
 import hashlib
+import re
+from urllib.parse import urlsplit
 
 import pytest
 
-from ntfsmnt.demo import DemoError, attach_image, ensure_image
+from ntfsmnt.demo import DEMO_SHA256, DEMO_URL, DemoError, attach_image, ensure_image
 
+def test_pinned_hash_is_a_real_sha256_digest():
+    assert re.fullmatch(r"[0-9a-f]{64}", DEMO_SHA256)
+
+def test_demo_url_points_at_the_demo_v1_release_asset():
+    parsed = urlsplit(DEMO_URL)
+    assert parsed.netloc == "github.com"
+    assert parsed.path == ("/AkshayHarti/ntfs-mounter/releases/download/"
+                           "demo-v1/demo.img")
 
 def write(path, data=b"image"):
     path.write_bytes(data)

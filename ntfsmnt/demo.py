@@ -17,9 +17,9 @@ from pathlib import Path
 from ntfsmnt.cli import real_run
 
 DEMO_URL = "https://github.com/AkshayHarti/ntfs-mounter/releases/download/demo-v1/demo.img"
-# Filled when the demo asset is uploaded; an empty hash refuses rather than
-# attaching something unverified.
-DEMO_SHA256 = ""
+# The pinned hash of the `demo.img` asset on the `demo-v1` release. An empty
+# hash refuses rather than attaching something unverified.
+DEMO_SHA256 = "8713b7aceac000c8eaf6dd35aca63373b605bb6dd7eccf2890c24a5925d9aba4"
 
 DEVICE = re.compile(r"/dev/disk\d+")
 

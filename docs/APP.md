@@ -165,16 +165,18 @@ and rebuilds `dist/ntfsmnt.app` on every run:
 ```
 dist/ntfsmnt.app/Contents/Info.plist
 dist/ntfsmnt.app/Contents/MacOS/ntfsmnt-menu
+dist/ntfsmnt.app/Contents/MacOS/ntfsmnt-approve
 dist/ntfsmnt.app/Contents/Resources/install-privileged.sh
 dist/ntfsmnt.app/Contents/Resources/install-privileged.command
 ```
 
-It lints the plist (`plutil -lint`), compiles with
-`swiftc -O -framework Cocoa`, copies the installer into `Contents/Resources`,
-generates the `.command` wrapper from the version in `ntfsmnt/__init__.py`,
-checks it with `zsh -n`, ad-hoc signs (`codesign --force --deep --sign -`), and
-then prints `codesign --verify --deep --strict`, `codesign -dv`, and the bundle
-size. `dist/` is git-ignored.
+It lints the plist (`plutil -lint`), compiles the two Swift binaries with
+`swiftc -O` (`-framework Cocoa` for the menu, `-framework
+LocalAuthentication` for the Touch ID approval helper), copies the installer
+into `Contents/Resources`, generates the `.command` wrapper from the version in
+`ntfsmnt/__init__.py`, checks it with `zsh -n`, ad-hoc signs
+(`codesign --force --deep --sign -`), and then prints `codesign --verify --deep
+--strict`, `codesign -dv`, and the bundle size. `dist/` is git-ignored.
 
 ## Uninstall
 
