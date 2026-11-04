@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Why ntfsmnt — the problem and the solution</title>
+<meta name="description" content="macOS can read NTFS but not write to it. The usual fixes cost a kernel extension, SIP changes, money, or a reboot. ntfsmnt mounts one volume read-write through FUSE-T and ntfs-3g, keeps every risky action explicit, and lets an agent ask for a narrow, expiring grant instead of root.">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131312" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <p class="wordmark"><a href="index.html">ntfsmnt</a></p>
+  <nav aria-label="Sections">
+    <a href="#problem">The problem</a>
+    <a href="#solution">The solution</a>
+    <a href="#grants">Agent grants</a>
+    <a href="#limits">Limits</a>
+    <a href="#install">Install</a>
+  </nav>
+</header>
+
+<main id="main">
+
+<section id="problem" class="hero">
+  <h1>Your Mac can read NTFS. It cannot write to it.</h1>
+  <p class="lede">Apple's built-in NTFS driver mounts Windows disks read-only. Copying a file off one works. Copying a file onto one does not — and every workaround asks you to give up something you probably wanted to keep.</p>
+  <p class="evidence">534 tests &middot; MIT licence &middot; macOS only &middot; no kernel extension, no SIP change, no reboot</p>
+</section>
+
+<section>
+  <h2>What the workarounds cost</h2>
+  <ul class="invariants">
+    <li><strong>A commercial driver.</strong> Paragon NTFS for Mac and Tuxera NTFS work, and both are paid, closed-source kernel extensions. That is a reasonable trade for a studio; it is a lot of trust for one external drive.</li>
+    <li><strong>macFUSE plus ntfs-3g.</strong> The long-standing free route. macFUSE installs a kernel extension, which means reducing macOS startup security and rebooting. It also puts a kernel component between your data and the disk.</li>
+    <li><strong>Reformat to exFAT.</strong> Removes the problem by removing the filesystem. You lose journaling, POSIX ownership, and the behaviour that made the disk NTFS in the first place.</li>
+    <li><strong>A Windows VM or a second machine.</strong> Correct, isolated, and far more work than copying a file. It also does not help a script that needs the disk mounted on this Mac.</li>
+    <li><strong>Terminal recipes.</strong> The <code>sudo</code> one-liners that mount NTFS read-write usually work until the disk is dirty, hibernated, or unmounted badly — then the volume is left half-mounted and the next attempt fails for a different reason.</li>
+  </ul>
+
+  <p class="scope">The people who hit this are not edge cases: camera cards formatted on Windows, external SSDs shared between platforms, Boot Camp partitions, and anyone who receives a drive from a Windows user. The request is small — write one file, safely — but the filesystem does not offer a small answer.</p>
+</section>
+
+<section id="solution">
+  <h2>The solution: a userspace mount with explicit edges</h2>
+  <p>ntfsmnt mounts one NTFS volume read-write through <a href="https://www.fuse-t.org/">FUSE-T</a> and the FUSE-T build of <a href="https://github.com/macos-fuse-t/ntfs-3g">ntfs-3g</a>. FUSE-T is a userspace filesystem layer: no kernel extension, no startup-security change, no reboot. The mount is real — ordinary reads and writes work — but nothing is added to the kernel to make it happen.</p>
+
+  <p>What makes it usable is not the mount. It is the set of edges around it:</p>
+
+  <ul class="invariants">
+    <li><strong>One volume at a time.</strong> ntfsmnt replaces Apple's mount for a single device, by label, UUID, or device path. Duplicate labels raise an error instead of guessing, and a mount that belongs to another volume is never evicted to make room.</li>
+    <li><strong>No write without proof.</strong> After mounting, it writes a small probe file, reads it back, deletes it, and checks that the mount point is owned by the invoking user. Success means the write actually landed.</li>
+    <li><strong>Failure restores the read-only mount.</strong> ntfsmnt has to evict Apple's mount to take the volume. Every failure path puts the read-only mount back before returning, and a message that claims "restored" is only printed when the mount table confirms it.</li>
+    <li><strong>No automatic repair.</strong> It never runs <code>ntfsfix</code>, <code>ntfsresize</code>, <code>mkntfs</code>, or <code>ntfswipe</code>. Hibernated and dirty volumes are refused by default; <code>--recover</code> and <code>--remove-hiberfile</code> are opt-in, and the destructive one requires the volume label typed by hand.</li>
+    <li><strong>No <code>kill -9</code>.</strong> Unmount sends one <code>SIGTERM</code> after a normal unmount reports busy. Disk processes are never force-killed.</li>
+  </ul>
+
+  <p>Those rules are not documentation only. They are invariants in <a href="https://github.com/AkshayHarti/ntfs-mounter/blob/main/AGENTS.md">AGENTS.md</a>, and the test suite exercises the failure paths through injected runners, so the mount and unmount sequences run without a real disk.</p>
+</section>
+
+<section id="grants">
+  <h2>When an agent asks, a human grants</h2>
+  <p>The same core is exposed four ways: a command line, a loopback-only web dashboard, a menu-bar app, and an MCP server over stdio. The first three are for a person at the machine. The fourth is for an agent, and it is where the design gets strict.</p>
+
+  <p><code>ntfsmnt mcp</code> runs as the unprivileged user and holds only an agent token. Nine tools are exposed: three read tools that work anywhere, and six action tools for mount, unmount, eject, and grants. Every action needs a grant that is:</p>
+
+  <ul class="invariants">
+    <li><strong>Narrow.</strong> Bound to one volume and the specific actions requested, with a short lifetime.</li>
+    <li><strong>Approved by a human.</strong> A single-use nonce opens a browser page; the agent token cannot approve, deny, or mint a grant.</li>
+    <li><strong>Audited in two phases.</strong> An <code>attempt</code> line is written before the operation runs, and an <code>ok</code> or <code>fail</code> line after. If the audit log cannot be written, the mount and eject fail closed.</li>
+    <li><strong>Never destructive.</strong> <code>--recover</code> and <code>--remove-hiberfile</code> are not reachable from any tool or grant route. The two flags that can damage data stay human-only.</li>
+  </ul>
+
+  <p class="scope">The agent can ask; it cannot help itself. That is the whole point of the split: the useful 90% becomes callable, and the irreversible 10% keeps a person in the loop.</p>
+</section>
+
+<section id="limits">
+  <h2>What it does not do</h2>
+  <ul class="invariants">
+    <li><strong>It is not a general NTFS driver.</strong> One volume at a time, on macOS, with FUSE-T and ntfs-3g installed by the setup script. If you need several NTFS volumes mounted at once, this is the wrong tool.</li>
+    <li><strong>It is not a repair tool.</strong> A damaged volume needs Windows or a deliberate recovery workflow, not a mount with extra flags.</li>
+    <li><strong>The menu-bar app is unsigned.</strong> Notarization needs an Apple Developer ID. The app works without it, but macOS will ask you to confirm the first launch.</li>
+    <li><strong>Real-disk coverage is narrow.</strong> The test suite is hermetic; the manual acceptance procedure runs on one real NTFS volume with root and Full Disk Access. A wider disk matrix is future work, not a claim.</li>
+  </ul>
+</section>
+
+<section id="install">
+  <h2>Install</h2>
+  <dl class="commands">
+    <dt>From a checkout</dt>
+    <dd><code>git clone https://github.com/AkshayHarti/ntfs-mounter.git &amp;&amp; cd ntfs-mounter &amp;&amp; ./scripts/setup.sh</code></dd>
+    <dt>PyPI</dt>
+    <dd><code>uv tool install "ntfsmnt[web]"</code></dd>
+    <dt>For an agent</dt>
+    <dd><code>uvx ntfsmnt mcp</code> — after the one-time <code>sudo ./scripts/install-privileged.sh</code></dd>
+    <dt>Then</dt>
+    <dd><code>ntfsmnt list</code> to see volumes, <code>ntfsmnt mount HD1</code> to take one read-write.</dd>
+  </dl>
+
+  <p class="future"><strong>Status.</strong> The grant-scoped MCP server is merged and the 0.2.0 release is in progress. PyPI still serves 0.1.0, which has the CLI and the web UI but no MCP server. The checkout install is the reliable way to try the agent path today.</p>
+
+  <p>Read the <a href="index.html">project page</a> for the full command reference, or the <a href="https://github.com/AkshayHarti/ntfs-mounter">repository</a> for the specs, plans, and tests behind each decision.</p>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <p class="footer-line">
+    <a href="https://github.com/AkshayHarti/ntfs-mounter/blob/main/LICENSE">MIT licence</a>
+    <span aria-hidden="true">/</span>
+    <a href="https://pypi.org/project/ntfsmnt/">PyPI</a>
+    <span aria-hidden="true">/</span>
+    <a href="https://github.com/AkshayHarti/ntfs-mounter">GitHub</a>
+  </p>
+  <p class="footer-line muted">ntfsmnt 0.2.0 &middot; updated <time datetime="2026-11-04">2026-11-04</time> &middot; <a href="https://akshayharti.github.io/ntfs-mounter/">akshayharti.github.io/ntfs-mounter</a></p>
+</footer>
+
+</body>
+</html>
