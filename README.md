@@ -12,6 +12,7 @@ Read-write NTFS on macOS, from the command line.
 - [Commands](#commands)
 - [Web UI](#web-ui)
 - [Menu-bar app](#menu-bar-app)
+- [MCP server](#mcp-server)
 - [JSON output](#json-output)
 - [Privileges and the sudo re-exec](#privileges-and-the-sudo-re-exec)
 - [TCC / Full Disk Access](#tcc--full-disk-access)
@@ -25,7 +26,8 @@ Read-write NTFS on macOS, from the command line.
 ## AI surfaces
 
 - `/` dashboard (alias `/agent`): natural-language intent composes UI from a closed component registry as OpenUI Lang, streamed over SSE as AG-UI events. Deterministic planner by default; optional OpenAI-compatible LLM adapter with validator + deterministic fallback. Agent proposes, you confirm — it never mounts, unmounts, or ejects. Classic page at `/classic`.
-- `ntfsmnt mcp`: grant-scoped MCP server over stdio. Three read tools (`list_volumes`, `get_status`, `run_doctor`) run anywhere; six action tools (mount, unmount, eject, grants) need a narrow, expiring grant a human approves. `--recover` and `--remove-hiberfile` are never grantable.
+- `ntfsmnt mcp`: grant-scoped MCP server over stdio. Reads are free; mount,
+  unmount, and eject need a narrow grant a human approves. [Details](#mcp-server).
 - Agent docs: `docs/AGENT.md`, agent index: `site/llms.txt`. Details: [The agentic dashboard](#the-agentic-dashboard--alias-agent).
 
 macOS mounts NTFS read-only through its built-in FSKit driver. `ntfsmnt` replaces
@@ -461,25 +463,6 @@ over SSE as **AG-UI** events. The classic page lives at `/classic`.
 - Destructive options (`--recover`, `--remove-hiberfile`) stay on the classic
   dashboard.
 
-`ntfsmnt mcp` is an MCP server on stdio. Three read tools (`list_volumes`,
-`get_status`, `run_doctor`) need no privilege. Six more — `request_grant`,
-`mount_volume`, `unmount_volume`, `eject_volume`, `list_grants`,
-`revoke_grant` — let an agent finish the job inside a **narrow, expiring
-grant** that a human approves in the browser. `recover` and
-`remove-hiberfile` are never grantable.
-
-```bash
-sudo ./scripts/install-privileged.sh   # once: root CLI + narrow NOPASSWD rule
-uvx ntfsmnt mcp                        # what the AI client runs
-uvx ntfsmnt mcp --approve touchid      # optional Touch ID helper (app build)
-uvx ntfsmnt mcp --demo                 # attach the disposable demo image first
-```
-
-The adapter gets only an agent token; the human token stays in the root
-controller. `ntfsmnt demo` downloads a small image once into
-`~/Library/Caches/ntfsmnt/`, verifies its pinned hash, and attaches it
-read-only. See `docs/AGENT.md` and `server.json`.
-
 ## Menu-bar app
 
 `scripts/install-app.sh` builds and installs `ntfsmnt.app` (unsigned), then the
@@ -535,6 +518,124 @@ The app is not notarized (no Developer ID yet); building it locally avoids the
 quarantine prompt. Signing and notarization steps are in
 [docs/APP.md](docs/APP.md). Terminal use of `sudo ntfsmnt web` still works and
 keeps the terminal's Full Disk Access attribution instead of the app's.
+
+## MCP server
+
+`ntfsmnt mcp` serves the Model Context Protocol (JSON-RPC 2.0 over stdio,
+protocol `2024-11-05`) so an AI client can read volume state and ask you for
+permission to change one. It adds no privilege the CLI does not already have:
+the adapter holds only an agent token, and the human token never leaves the root
+controller.
+
+### Install
+
+The action tools go through a root controller, so run the privileged install
+once:
+
+```bash
+sudo ./scripts/install-privileged.sh   # root CLI + narrow NOPASSWD rule
+```
+
+**PyPI still serves 0.1.0, which predates this subcommand.** Until 0.2.0 is
+published, `uvx ntfsmnt mcp` fails with:
+
+```
+ntfsmnt: error: argument command: invalid choice: 'mcp' (choose from list, doctor, status, mount, unmount, eject, web)
+```
+
+Run the checkout instead:
+
+```bash
+uv run ntfsmnt mcp
+```
+
+### Client configuration
+
+Once 0.2.0 is on PyPI, the client runs `uvx ntfsmnt mcp`:
+
+```json
+{
+  "mcpServers": {
+    "ntfsmnt": {
+      "command": "uvx",
+      "args": ["ntfsmnt", "mcp"]
+    }
+  }
+}
+```
+
+Today, point it at the checkout:
+
+```json
+{
+  "mcpServers": {
+    "ntfsmnt": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/ntfs-mounter",
+               "ntfsmnt", "mcp"]
+    }
+  }
+}
+```
+
+Restart the client after editing its config. stdout carries JSON-RPC only;
+diagnostics go to stderr.
+
+GUI clients do not inherit your shell `PATH`. If the client reports that `uv`
+is missing, use its absolute path (`which uv`).
+
+### Tools
+
+| Tool | Needs a grant | What it does |
+|---|---|---|
+| `list_volumes` | no | the CLI's `list --json` snapshot |
+| `get_status` | no | one volume plus the mounts that serve it |
+| `run_doctor` | no | the environment checks |
+| `request_grant` | no | asks a human; returns when approved, denied, or timed out |
+| `mount_volume` | yes | mounts the volume the grant names |
+| `unmount_volume` | yes | unmounts it |
+| `eject_volume` | yes | ejects it |
+| `list_grants` | no | grants that are still alive |
+| `revoke_grant` | no | spends one early |
+
+Volume arguments accept a label, UUID, device, or mount point — the same
+resolver the CLI uses.
+
+### Grants
+
+`request_grant` opens an approval page in the browser and blocks until you
+decide. The grant is narrow and expiring:
+
+| | |
+|---|---|
+| Scope | one volume, and a subset of `mount`, `unmount`, `eject`; a mount grant also covers unmount |
+| TTL | 60–1800 s, default 900 (15 min) |
+| Undecided request | expires after 300 s; at most 3 pending at once |
+| Approval | browser by default; `--approve touchid` prefers the app's Touch ID helper and falls back to the browser; `--no-browser` prints the URL to stderr instead of opening it |
+| Bound to you | the approval link carries a single-use nonce, and the agent token cannot approve its own request |
+
+`recover` and `remove_hiberfile` are not representable in a grant at all, so no
+tool call and no approval page can reach them. A person runs those from the CLI.
+
+A round trip: `request_grant` with `{"volume": "HD1", "actions": ["mount"]}`
+returns a `grant_id` once you approve, then `mount_volume` with
+`{"volume": "HD1", "grant_id": "g_..."}` performs it. Every action tool takes
+that same `volume` and `grant_id` pair.
+
+### Try it without a disk
+
+`--demo` downloads a small NTFS image once into `~/Library/Caches/ntfsmnt/`,
+verifies its pinned SHA-256, attaches it read-only, then serves. A missing or
+mismatched image is refused, never attached.
+
+```bash
+uv run ntfsmnt mcp --demo
+```
+
+The agent page at `/` is a separate surface — see
+[The agentic dashboard](#the-agentic-dashboard--alias-agent) and
+[docs/AGENT.md](docs/AGENT.md). The registry manifest is `server.json`
+(`io.github.akshayharti/ntfsmnt`).
 
 ## JSON output
 
@@ -802,7 +903,7 @@ uv run pytest -q
 
 Without `--extra web` the FastAPI/Jinja API, page, and schema tests skip; the
 service, models, and config tests still run.
-The suite has 534 tests and never touches hardware. Subprocess effects
+The suite has 538 tests and never touches hardware. Subprocess effects
 (`diskutil`, `ntfs-3g`, `mount`, `pgrep`, `kill`, `sleep`) are injected as
 callables, and the mount-point creation, write probe, and ownership `stat` are
 monkeypatched in tests that exercise the orchestration.
