@@ -4,6 +4,24 @@
 
 Read-write NTFS on macOS, from the command line.
 
+## Contents
+
+- [AI surfaces](#ai-surfaces)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Commands](#commands)
+- [Web UI](#web-ui)
+- [Menu-bar app](#menu-bar-app)
+- [JSON output](#json-output)
+- [Privileges and the sudo re-exec](#privileges-and-the-sudo-re-exec)
+- [TCC / Full Disk Access](#tcc--full-disk-access)
+- [Safety model](#safety-model)
+- [Hibernated and dirty volumes](#hibernated-and-dirty-volumes)
+- [Troubleshooting](#troubleshooting)
+- [Limitations](#limitations)
+- [Development](#development)
+- [Uninstall](#uninstall)
+
 ## AI surfaces
 
 - `/` dashboard (alias `/agent`): natural-language intent composes UI from a closed component registry as OpenUI Lang, streamed over SSE as AG-UI events. Deterministic planner by default; optional OpenAI-compatible LLM adapter with validator + deterministic fallback. Agent proposes, you confirm — it never mounts, unmounts, or ejects. Classic page at `/classic`.
