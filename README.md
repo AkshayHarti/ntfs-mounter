@@ -529,8 +529,7 @@ controller.
 
 ### Install
 
-The action tools go through a root controller, so run the privileged install
-once:
+Action tools go through a root controller. Install it once:
 
 ```bash
 sudo ./scripts/install-privileged.sh   # root CLI + narrow NOPASSWD rule
@@ -598,8 +597,8 @@ is missing, use its absolute path (`which uv`).
 | `list_grants` | no | grants that are still alive |
 | `revoke_grant` | no | spends one early |
 
-Volume arguments accept a label, UUID, device, or mount point — the same
-resolver the CLI uses.
+Volume arguments take a label, UUID, device, or mount point, resolved the same
+way as in the CLI.
 
 ### Grants
 
@@ -624,9 +623,9 @@ that same `volume` and `grant_id` pair.
 
 ### Try it without a disk
 
-`--demo` downloads a small NTFS image once into `~/Library/Caches/ntfsmnt/`,
-verifies its pinned SHA-256, attaches it read-only, then serves. A missing or
-mismatched image is refused, never attached.
+`--demo` downloads a small NTFS image once to `~/Library/Caches/ntfsmnt/`,
+verifies its pinned SHA-256, attaches it read-only, then serves. A mismatched
+image is refused, never attached.
 
 ```bash
 uv run ntfsmnt mcp --demo
